@@ -2,8 +2,8 @@ defmodule Rig.PropertyTest do
   @moduledoc """
   Property-based tests for Rig.
 
-  10 invariants × 2000 runs × sequences up to 500 events =
-  ~1,000,000 random cranks per test run.
+  10 invariants × 8,000 runs × sequences up to 1,000 events.
+  ~40,000,000 random cranks in ~10 seconds. Pure functions are cheap.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -12,8 +12,8 @@ defmodule Rig.PropertyTest do
 
   @moduletag :property
 
-  @runs 2000
-  @seq 500
+  @runs 8_000
+  @seq 1000
 
   # ===========================================================================
   # Invariant 1: Machine struct integrity
