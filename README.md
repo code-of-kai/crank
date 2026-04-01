@@ -1,21 +1,136 @@
 # Decidable
 
-**TODO: Add description**
+Pure state machines for Elixir. Testable data structures first, optional `gen_statem` process adapter.
+
+## The idea
+
+Most Elixir state machine libraries force you into a process. Decidable doesn't. You write one module with `handle_event/4`, and it works in two contexts:
+
+1. **Pure** -- `Decidable.new/2` and `Decidable.transition/2` return a plain struct. No process, no side effects, no telemetry. Use it in tests, LiveView reducers, Oban workers, scripts.
+
+2. **Process** -- `Decidable.Server` wraps the same module in `:gen_statem`. Supervision, telemetry, timeouts, replies -- the full OTP toolkit.
+
+## Quick start
+
+```elixir
+defmodule MyApp.Door do
+  use Decidable
+
+  @impl true
+  def init(_opts), do: {:ok, :locked, %{}}
+
+  @impl true
+  def handle_event(:locked, _, :unlock, data), do: {:next_state, :unlocked, data}
+  def handle_event(:unlocked, _, :lock, data), do: {:next_state, :locked, data}
+  def handle_event(:unlocked, _, :open, data), do: {:next_state, :opened, data}
+  def handle_event(:opened, _, :close, data), do: {:next_state, :unlocked, data}
+end
+```
+
+### Pure usage
+
+```elixir
+machine =
+  MyApp.Door
+  |> Decidable.new()
+  |> Decidable.transition(:unlock)
+  |> Decidable.transition(:open)
+
+machine.state
+#=> :opened
+
+machine.pending_actions
+#=> []
+```
+
+### Process usage
+
+```elixir
+{:ok, pid} = Decidable.Server.start_link(MyApp.Door, [])
+Decidable.Server.cast(pid, :unlock)
+```
+
+## Callback signature
+
+`handle_event/4` matches `:gen_statem` exactly:
+
+```elixir
+def handle_event(state, event_type, event_content, data)
+```
+
+- `state` -- current state, the primary pattern match target
+- `event_type` -- `:internal`, `:cast`, `{:call, from}`, `:info`, `:timeout`, `:state_timeout`, `{:timeout, name}`
+- `event_content` -- the event payload
+- `data` -- accumulated machine data
+
+In pure code, event_type is always `:internal`. Use `_` to write clauses that work in both contexts:
+
+```elixir
+# Works everywhere
+def handle_event(:idle, _, :activate, data), do: {:next_state, :active, data}
+
+# Server-only: reply to synchronous calls
+def handle_event(state, {:call, from}, :status, data) do
+  {:keep_state, data, [{:reply, from, state}]}
+end
+
+# Server-only: handle timeouts
+def handle_event(:waiting, :state_timeout, :expired, data) do
+  {:next_state, :timed_out, data}
+end
+```
+
+## Actions as data
+
+When a callback returns actions (timeouts, replies, postpone, etc.), the pure core stores them in `machine.pending_actions` as inert data. It never executes them. The Server executes them via `:gen_statem`.
+
+```elixir
+def handle_event(:paid, _, :ship, data) do
+  {:next_state, :shipped, data, [{:state_timeout, 86_400_000, :delivery_timeout}]}
+end
+```
+
+```elixir
+machine = Decidable.transition(machine, :ship)
+machine.pending_actions
+#=> [{:state_timeout, 86_400_000, :delivery_timeout}]
+```
+
+Each `transition/2` call replaces `pending_actions` -- they don't accumulate across pipeline stages.
+
+## Enter callbacks
+
+Optional `on_enter/3` fires after state changes:
+
+```elixir
+@impl true
+def on_enter(old_state, new_state, data) do
+  {:keep_state, Map.put(data, :entered_at, System.monotonic_time())}
+end
+```
+
+## Stopped machines
+
+`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further transitions raise `Decidable.StoppedError`. Use `transition!/2` in tests to raise immediately on stop results.
+
+## Unhandled events
+
+No catch-all. Unhandled events crash with `FunctionClauseError`. This is deliberate -- a state machine that silently ignores events is hiding bugs. Let it crash; let the supervisor handle it.
 
 ## Installation
-
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `decidable_scaffold` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:decidable_scaffold, "~> 0.1.0"}
+    {:decidable, "~> 0.1.0"}
   ]
 end
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/decidable_scaffold>.
+## Design
 
+See [DESIGN.md](DESIGN.md) for the full specification and rationale behind every decision.
+
+## License
+
+MIT
