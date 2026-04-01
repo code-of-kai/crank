@@ -183,9 +183,32 @@ defmodule Rig.ServerTest do
       Rig.Server.cast(pid, :unlock)
       Process.sleep(50)
 
-      assert_received {^ref, [:rig, :transition], %{system_time: _}, %{module: Door}}
+      assert_received {^ref, [:rig, :transition], %{system_time: _},
+                       %{module: Door, data: _data}}
 
       :telemetry.detach("test-rig-transition")
+      GenServer.stop(pid)
+    end
+
+    test "telemetry metadata includes machine data" do
+      ref = make_ref()
+      parent = self()
+
+      handler = fn _event, _measurements, metadata, _config ->
+        send(parent, {ref, metadata})
+      end
+
+      :telemetry.attach("test-rig-data", [:rig, :transition], handler, nil)
+
+      {:ok, pid} = Rig.Server.start_link(Door, key: "secret")
+      Rig.Server.cast(pid, :unlock)
+      Process.sleep(50)
+
+      # Flush until we get a transition with to: :unlocked
+      assert_received {^ref, %{to: :unlocked, data: data}}
+      assert data.key == "secret"
+
+      :telemetry.detach("test-rig-data")
       GenServer.stop(pid)
     end
   end

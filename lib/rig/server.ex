@@ -138,15 +138,15 @@ defmodule Rig.Server.Adapter do
     if function_exported?(module, :on_enter, 3) do
       case module.on_enter(old_state, new_state, data) do
         {:keep_state, new_data} ->
-          report(module, old_state, new_state, nil)
+          report(module, old_state, new_state, nil, new_data)
           {:keep_state, %{internal | data: new_data}}
 
         {:keep_state, new_data, actions} ->
-          report(module, old_state, new_state, nil)
+          report(module, old_state, new_state, nil, new_data)
           {:keep_state, %{internal | data: new_data}, actions}
       end
     else
-      report(module, old_state, new_state, nil)
+      report(module, old_state, new_state, nil, data)
       :keep_state_and_data
     end
   end
@@ -163,12 +163,12 @@ defmodule Rig.Server.Adapter do
 
   @spec translate_result(Rig.handle_event_result(), t(), term()) :: term()
   defp translate_result({:next_state, new_state, new_data}, internal, event) do
-    report(internal.module, nil, new_state, event)
+    report(internal.module, nil, new_state, event, new_data)
     {:next_state, new_state, %{internal | data: new_data}}
   end
 
   defp translate_result({:next_state, new_state, new_data, actions}, internal, event) do
-    report(internal.module, nil, new_state, event)
+    report(internal.module, nil, new_state, event, new_data)
     {:next_state, new_state, %{internal | data: new_data}, actions}
   end
 
@@ -192,12 +192,12 @@ defmodule Rig.Server.Adapter do
     {:stop, reason, %{internal | data: new_data}}
   end
 
-  @spec report(module(), term(), term(), term()) :: :ok
-  defp report(module, from, to, event) do
+  @spec report(module(), term(), term(), term(), term()) :: :ok
+  defp report(module, from, to, event, data) do
     :telemetry.execute(
       [:rig, :transition],
       %{system_time: System.system_time()},
-      %{module: module, from: from, to: to, event: event}
+      %{module: module, from: from, to: to, event: event, data: data}
     )
   end
 end
