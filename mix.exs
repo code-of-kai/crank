@@ -45,7 +45,7 @@ defmodule Rig.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md DESIGN.md)
+      files: ~w(lib guides .formatter.exs mix.exs README.md LICENSE CHANGELOG.md DESIGN.md)
     ]
   end
 
@@ -53,7 +53,10 @@ defmodule Rig.MixProject do
     [
       main: "Rig",
       source_ref: "v#{@version}",
-      extras: ["CHANGELOG.md", "DESIGN.md"]
+      extras: ["guides/hexagonal-architecture.md", "CHANGELOG.md", "DESIGN.md"],
+      groups_for_extras: [
+        Guides: ~r/guides\/.*/
+      ]
     ]
   end
 end
