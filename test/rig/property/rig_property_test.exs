@@ -226,4 +226,29 @@ defmodule Rig.PropertyTest do
       assert via_crank.data == via_bang.data
     end
   end
+
+  # ===========================================================================
+  # Invariant 11: Pure/process equivalence
+  # ===========================================================================
+
+  property "invariant: pure crank and Server produce identical state and data" do
+    check all(events <- turnstile_event_sequence(100), max_runs: @runs) do
+      # Pure path
+      pure =
+        Enum.reduce(events, Rig.new(Rig.Examples.Turnstile), fn event, m ->
+          Rig.crank(m, event)
+        end)
+
+      # Process path — send all events, then read final state via :sys
+      {:ok, pid} = Rig.Server.start_link(Rig.Examples.Turnstile, [])
+      Enum.each(events, &Rig.Server.cast(pid, &1))
+
+      # Synchronize: :sys.get_state blocks until the mailbox is drained
+      {process_state, %Rig.Server.Adapter{data: process_data}} = :sys.get_state(pid)
+      GenServer.stop(pid)
+
+      assert pure.state == process_state
+      assert pure.data == process_data
+    end
+  end
 end
