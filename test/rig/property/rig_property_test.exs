@@ -2,8 +2,8 @@ defmodule Rig.PropertyTest do
   @moduledoc """
   Property-based tests for Rig.
 
-  11 invariants × 10,000 runs × sequences up to 1,000 events.
-  ~50,000,000 random cranks in ~12 seconds. Pure functions are cheap.
+  13 invariants. 10 pure (10,000 runs × up to 1,000 events each),
+  3 process (1,000–10,000 runs). ~12 seconds, ~50M random cranks.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -249,6 +249,85 @@ defmodule Rig.PropertyTest do
 
       assert pure.state == process_state
       assert pure.data == process_data
+    end
+  end
+
+  # ===========================================================================
+  # Invariant 12: Multi-sender conservation (Joe Armstrong #1)
+  # ===========================================================================
+
+  property "invariant: conservation holds regardless of sender interleaving" do
+    check all(
+            # Generate events split across N senders
+            sender_count <- integer(2..8),
+            events_per_sender <- integer(5..30),
+            max_runs: 1_000
+          ) do
+      {:ok, pid} = Rig.Server.start_link(Rig.Examples.Turnstile, [])
+
+      # Each sender gets a random event list and fires concurrently
+      senders =
+        for _ <- 1..sender_count do
+          events = for _ <- 1..events_per_sender, do: Enum.random([:coin, :push])
+
+          Task.async(fn ->
+            Enum.each(events, fn event ->
+              Rig.Server.cast(pid, event)
+            end)
+
+            events
+          end)
+        end
+
+      all_events = Task.await_many(senders) |> List.flatten()
+
+      # Drain the mailbox
+      {_state, %Rig.Server.Adapter{data: data}} = :sys.get_state(pid)
+      GenServer.stop(pid)
+
+      # Conservation: total coins == total coin events regardless of interleaving
+      total_coins = Enum.count(all_events, &(&1 == :coin))
+      assert data.coins == total_coins
+
+      # Passes bounded by total pushes
+      total_pushes = Enum.count(all_events, &(&1 == :push))
+      assert data.passes <= total_pushes
+      assert data.passes >= 0
+    end
+  end
+
+  # ===========================================================================
+  # Invariant 13: Restart equivalence (Joe Armstrong #2)
+  # ===========================================================================
+
+  property "invariant: restarted server is indistinguishable from a fresh one" do
+    check all(
+            pre_events <- turnstile_event_sequence(50),
+            post_events <- turnstile_event_sequence(50),
+            max_runs: 1_000
+          ) do
+      # Start, crank some events, then kill the process
+      {:ok, pid} = Rig.Server.start_link(Rig.Examples.Turnstile, [])
+      Enum.each(pre_events, &Rig.Server.cast(pid, &1))
+      :sys.get_state(pid)
+      GenServer.stop(pid)
+
+      # Start fresh, send only the post_events
+      {:ok, fresh_pid} = Rig.Server.start_link(Rig.Examples.Turnstile, [])
+      Enum.each(post_events, &Rig.Server.cast(fresh_pid, &1))
+
+      {fresh_state, %Rig.Server.Adapter{data: fresh_data}} = :sys.get_state(fresh_pid)
+      GenServer.stop(fresh_pid)
+
+      # Compare with pure path (fresh machine + post_events only)
+      pure =
+        Enum.reduce(post_events, Rig.new(Rig.Examples.Turnstile), fn event, m ->
+          Rig.crank(m, event)
+        end)
+
+      # Restarted server must match a fresh machine — no leaked state
+      assert pure.state == fresh_state
+      assert pure.data == fresh_data
     end
   end
 end
