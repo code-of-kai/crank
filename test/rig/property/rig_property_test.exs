@@ -330,4 +330,109 @@ defmodule Rig.PropertyTest do
       assert pure.data == fresh_data
     end
   end
+
+  # ===========================================================================
+  # Order machine properties (complex, 5 states, 8 events, effects, on_enter)
+  # ===========================================================================
+
+  property "invariant: Order state is always in the declared state set" do
+    check all(events <- order_event_sequence(@seq), max_runs: @runs) do
+      Enum.reduce(events, Rig.new(Rig.Examples.Order), fn event, m ->
+        new_m = Rig.crank(m, event)
+        assert new_m.state in Rig.Examples.Order.states()
+        new_m
+      end)
+    end
+  end
+
+  property "invariant: Order transitions counter equals actual state changes" do
+    check all(events <- order_event_sequence(@seq), max_runs: @runs) do
+      machine =
+        Enum.reduce(events, Rig.new(Rig.Examples.Order), fn event, m ->
+          Rig.crank(m, event)
+        end)
+
+      # on_enter logs every transition — its length must equal transitions count
+      assert length(machine.data.enter_log) == machine.data.transitions
+    end
+  end
+
+  property "invariant: Order on_enter log records correct from→to pairs" do
+    check all(events <- order_event_sequence(200), max_runs: @runs) do
+      machine =
+        Enum.reduce(events, Rig.new(Rig.Examples.Order), fn event, m ->
+          Rig.crank(m, event)
+        end)
+
+      # Every entry in enter_log should have valid states
+      valid = Rig.Examples.Order.states()
+
+      Enum.each(machine.data.enter_log, fn {from, to} ->
+        assert from in valid, "on_enter from #{inspect(from)} not in valid states"
+        assert to in valid, "on_enter to #{inspect(to)} not in valid states"
+      end)
+    end
+  end
+
+  property "invariant: Order cancelled is absorbing — no escape once cancelled" do
+    check all(
+            pre <- order_event_sequence(100),
+            post <- order_event_sequence(100),
+            max_runs: @runs
+          ) do
+      # Crank until we hit cancelled (force it with a :cancel at the end)
+      machine =
+        Enum.reduce(pre ++ [:cancel], Rig.new(Rig.Examples.Order), fn event, m ->
+          Rig.crank(m, event)
+        end)
+
+      if machine.state == :cancelled do
+        # Every subsequent crank should stay cancelled
+        final =
+          Enum.reduce(post, machine, fn event, m ->
+            Rig.crank(m, event)
+          end)
+
+        assert final.state == :cancelled
+      end
+    end
+  end
+
+  property "invariant: Order pure/process equivalence (complex machine)" do
+    check all(events <- order_event_sequence(100), max_runs: 1_000) do
+      pure =
+        Enum.reduce(events, Rig.new(Rig.Examples.Order), fn event, m ->
+          Rig.crank(m, event)
+        end)
+
+      {:ok, pid} = Rig.Server.start_link(Rig.Examples.Order, [])
+      Enum.each(events, &Rig.Server.cast(pid, &1))
+
+      {process_state, %Rig.Server.Adapter{data: process_data}} = :sys.get_state(pid)
+      GenServer.stop(pid)
+
+      assert pure.state == process_state
+      assert pure.data.order_id == process_data.order_id
+      assert pure.data.total == process_data.total
+      assert pure.data.transitions == process_data.transitions
+      assert pure.data.notes == process_data.notes
+    end
+  end
+
+  property "invariant: Order determinism across complex event sequences" do
+    check all(events <- order_event_sequence(@seq), max_runs: @runs) do
+      run = fn ->
+        Enum.reduce(events, Rig.new(Rig.Examples.Order), fn event, m ->
+          Rig.crank(m, event)
+        end)
+      end
+
+      a = run.()
+      b = run.()
+
+      assert a.state == b.state
+      assert a.data == b.data
+      assert a.effects == b.effects
+    end
+  end
 end

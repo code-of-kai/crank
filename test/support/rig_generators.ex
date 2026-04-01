@@ -81,4 +81,27 @@ defmodule Rig.Generators do
       end)
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Order machine generators (complex, total)
+  # ---------------------------------------------------------------------------
+
+  @doc "A valid event for the Order machine."
+  def order_event do
+    member_of(Rig.Examples.Order.events())
+  end
+
+  @doc "A random sequence of Order events."
+  def order_event_sequence(max_length \\ 50) do
+    list_of(order_event(), min_length: 1, max_length: max_length)
+  end
+
+  @doc "An Order machine cranked to a random reachable state."
+  def order_in_random_state do
+    gen all(events <- list_of(order_event(), min_length: 0, max_length: 30)) do
+      Enum.reduce(events, Rig.new(Rig.Examples.Order), fn event, m ->
+        Rig.crank(m, event)
+      end)
+    end
+  end
 end
