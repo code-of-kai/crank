@@ -2,8 +2,8 @@ defmodule Rig.PropertyTest do
   @moduledoc """
   Property-based tests for Rig.
 
-  10 invariants × 8,000 runs × sequences up to 1,000 events.
-  ~40,000,000 random cranks in ~10 seconds. Pure functions are cheap.
+  11 invariants × 10,000 runs × sequences up to 1,000 events.
+  ~50,000,000 random cranks in ~12 seconds. Pure functions are cheap.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -12,7 +12,7 @@ defmodule Rig.PropertyTest do
 
   @moduletag :property
 
-  @runs 8_000
+  @runs 10_000
   @seq 1000
 
   # ===========================================================================
