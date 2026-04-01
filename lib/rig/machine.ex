@@ -3,7 +3,7 @@ defmodule Rig.Machine do
   The core data structure representing a finite state machine.
 
   A `%Rig.Machine{}` is a pure value — it holds the current state,
-  accumulated data, and any effects produced by the last step.
+  accumulated data, and any effects produced by the last crank.
   It never executes side effects. The optional `Rig.Runner` process
   adapter interprets and executes effects; in pure code, you
   inspect them directly.
@@ -12,8 +12,8 @@ defmodule Rig.Machine do
 
     * `:module` — the callback module implementing the `Rig` behaviour
     * `:state` — the current state (any term, typically an atom)
-    * `:data` — arbitrary user data carried through steps
-    * `:effects` — effects returned by the most recent step,
+    * `:data` — arbitrary user data carried through cranks
+    * `:effects` — effects returned by the most recent crank,
       stored as data for the caller or Runner to interpret
     * `:status` — `:running` or `{:stopped, reason}`
 

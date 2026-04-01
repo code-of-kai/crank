@@ -23,16 +23,16 @@ with an optional thin `:gen_statem` process adapter.
 - `module` -- the callback module
 - `state` -- current state (any term, typically an atom)
 - `data` -- arbitrary user data
-- `effects` -- effects from the last step, stored as inert data
+- `effects` -- effects from the last crank, stored as inert data
 - `status` -- `:running` or `{:stopped, reason}`
 
 Effects are **never executed** in the pure core. They are carried as data for
-the caller or Server to interpret. Each `step/2` call replaces (not
+the caller or Server to interpret. Each `crank/2` call replaces (not
 appends) `effects`.
 
 ### Layer 2: Process Shell (`Rig.Server`)
 
-A thin `:gen_statem` adapter (NOT GenServer). Delegates all step logic to
+A thin `:gen_statem` adapter (NOT GenServer). Delegates all crank logic to
 the pure callback module, then:
 
 - Executes effects (timeouts, replies, postpone, etc.)
@@ -62,7 +62,7 @@ The internal gen_statem implementation lives in `Rig.Server.Adapter`.
 
 The `event_type` argument is one of:
 
-- `:internal` -- pure steps via `Rig.step/2`, or `{:next_event, :internal, _}`
+- `:internal` -- pure cranks via `Rig.crank/2`, or `{:next_event, :internal, _}`
 - `:cast` -- async events via `Rig.Server.cast/2`
 - `{:call, from}` -- sync events via `Rig.Server.call/3`
 - `:info` -- raw messages from linked processes
@@ -103,10 +103,10 @@ the callback module and state.
 1. **No `states/0` callback** -- function clauses are the declaration
 2. **State-first in `handle_event/4`** -- the primary discriminator
 3. **Arity-4 with explicit event_type** -- matches gen_statem exactly, no hidden tagging
-4. **`:internal` for pure steps** -- honest about what a programmatic event is
+4. **`:internal` for pure cranks** -- honest about what a programmatic event is
 5. **`on_enter/3` receives old_state** -- essential for cleanup and logging
 6. **Effects are data** -- stored in `effects`, never executed in pure core
-7. **Effects replace, not accumulate** -- each step starts fresh
+7. **Effects replace, not accumulate** -- each crank starts fresh
 8. **Bare `%Machine{}` returns** -- enables pipeline ergonomics without tuple unwrapping
 9. **No catch-all defaults** -- unhandled events crash (FunctionClauseError)
 10. **No `current_state/1`** -- use `:sys.get_state` for debugging

@@ -145,15 +145,15 @@ defmodule Rig.PureTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Tests — Rig.step/2
+  # Tests — Rig.crank/2
   # ---------------------------------------------------------------------------
 
-  describe "Rig.step/2" do
-    test "steps to a new state" do
+  describe "Rig.crank/2" do
+    test "cranks to a new state" do
       machine =
         Door
         |> Rig.new()
-        |> Rig.step(:unlock)
+        |> Rig.crank(:unlock)
 
       assert machine.state == :unlocked
     end
@@ -162,8 +162,8 @@ defmodule Rig.PureTest do
       machine =
         Door
         |> Rig.new()
-        |> Rig.step(:unlock)
-        |> Rig.step(:open)
+        |> Rig.crank(:unlock)
+        |> Rig.crank(:open)
 
       assert machine.state == :opened
     end
@@ -172,25 +172,25 @@ defmodule Rig.PureTest do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step(:pay)
-        |> Rig.step(:ship)
+        |> Rig.crank(:pay)
+        |> Rig.crank(:ship)
 
       assert machine.state == :shipped
       assert machine.effects == [{:state_timeout, 86_400_000, :delivery_timeout}]
     end
 
-    test "each step replaces effects (no accumulation)" do
+    test "each crank replaces effects (no accumulation)" do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step(:pay)
+        |> Rig.crank(:pay)
 
       assert machine.effects == []
 
-      machine = Rig.step(machine, :ship)
+      machine = Rig.crank(machine, :ship)
       assert machine.effects == [{:state_timeout, 86_400_000, :delivery_timeout}]
 
-      machine = Rig.step(machine, :keep)
+      machine = Rig.crank(machine, :keep)
       assert machine.effects == []
     end
 
@@ -198,7 +198,7 @@ defmodule Rig.PureTest do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step(:keep)
+        |> Rig.crank(:keep)
 
       assert machine.state == :pending
       assert machine.effects == []
@@ -208,7 +208,7 @@ defmodule Rig.PureTest do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step(:keep_with_actions)
+        |> Rig.crank(:keep_with_actions)
 
       assert machine.state == :pending
       assert machine.effects == [{:state_timeout, 1000, :nudge}]
@@ -218,7 +218,7 @@ defmodule Rig.PureTest do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step(:noop)
+        |> Rig.crank(:noop)
 
       assert machine.state == :pending
       assert machine.effects == []
@@ -228,7 +228,7 @@ defmodule Rig.PureTest do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step(:noop_with_actions)
+        |> Rig.crank(:noop_with_actions)
 
       assert machine.state == :pending
       assert machine.effects == [{:state_timeout, 2000, :nag}]
@@ -238,8 +238,8 @@ defmodule Rig.PureTest do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step(:pay)
-        |> Rig.step(:cancel)
+        |> Rig.crank(:pay)
+        |> Rig.crank(:cancel)
 
       assert machine.status == {:stopped, :cancelled}
       assert machine.state == :paid
@@ -247,15 +247,15 @@ defmodule Rig.PureTest do
       assert machine.effects == []
     end
 
-    test "raises StoppedError when stepping a stopped machine" do
+    test "raises StoppedError when crankping a stopped machine" do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step(:pay)
-        |> Rig.step(:cancel)
+        |> Rig.crank(:pay)
+        |> Rig.crank(:cancel)
 
       assert_raise Rig.StoppedError, ~r/machine is stopped/, fn ->
-        Rig.step(machine, :ship)
+        Rig.crank(machine, :ship)
       end
     end
 
@@ -263,11 +263,11 @@ defmodule Rig.PureTest do
       machine = Rig.new(Door)
 
       assert_raise FunctionClauseError, fn ->
-        Rig.step(machine, :nonexistent_event)
+        Rig.crank(machine, :nonexistent_event)
       end
     end
 
-    test "event_type is :internal in pure steps" do
+    test "event_type is :internal in pure cranks" do
       defmodule EventTypeProbe do
         use Rig
 
@@ -283,7 +283,7 @@ defmodule Rig.PureTest do
       machine =
         EventTypeProbe
         |> Rig.new()
-        |> Rig.step(:go)
+        |> Rig.crank(:go)
 
       assert machine.data.event_type == :internal
     end
@@ -302,21 +302,21 @@ defmodule Rig.PureTest do
       machine = Rig.new(BadReturn)
 
       assert_raise ArgumentError, ~r/returned invalid result/, fn ->
-        Rig.step(machine, :go)
+        Rig.crank(machine, :go)
       end
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Tests — Rig.step!/2
+  # Tests — Rig.crank!/2
   # ---------------------------------------------------------------------------
 
-  describe "Rig.step!/2" do
+  describe "Rig.crank!/2" do
     test "returns machine on success" do
       machine =
         Door
         |> Rig.new()
-        |> Rig.step!(:unlock)
+        |> Rig.crank!(:unlock)
 
       assert machine.state == :unlocked
     end
@@ -325,10 +325,10 @@ defmodule Rig.PureTest do
       machine =
         Order
         |> Rig.new(order_id: 1, amount: 50)
-        |> Rig.step!(:pay)
+        |> Rig.crank!(:pay)
 
       assert_raise Rig.StoppedError, fn ->
-        Rig.step!(machine, :cancel)
+        Rig.crank!(machine, :cancel)
       end
     end
   end
@@ -342,18 +342,18 @@ defmodule Rig.PureTest do
       machine =
         WithEnter
         |> Rig.new()
-        |> Rig.step(:go)
+        |> Rig.crank(:go)
 
       assert machine.state == :running
       assert machine.data.entered == [{:idle, :running}]
     end
 
-    test "called on each step in a pipeline" do
+    test "called on each crank in a pipeline" do
       machine =
         WithEnter
         |> Rig.new()
-        |> Rig.step(:go)
-        |> Rig.step(:stop)
+        |> Rig.crank(:go)
+        |> Rig.crank(:stop)
 
       assert machine.data.entered == [{:running, :idle}, {:idle, :running}]
     end
@@ -362,7 +362,7 @@ defmodule Rig.PureTest do
       machine =
         WithEnterActions
         |> Rig.new()
-        |> Rig.step(:go)
+        |> Rig.crank(:go)
 
       assert machine.state == :b
       assert machine.effects == [{:state_timeout, 3000, :b_timeout}]
@@ -372,8 +372,8 @@ defmodule Rig.PureTest do
       machine =
         WithEnter
         |> Rig.new()
-        |> Rig.step(:go)
-        |> Rig.step(:go_with_actions)
+        |> Rig.crank(:go)
+        |> Rig.crank(:go_with_actions)
 
       assert machine.state == :finishing
       assert machine.effects == [{:state_timeout, 5000, :wrap_up}]

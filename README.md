@@ -6,7 +6,7 @@ Pure state machines for Elixir. Testable data structures first, optional `gen_st
 
 Most Elixir state machine libraries force you into a process. Rig doesn't. You write one module with `handle_event/4`, and it works in two contexts:
 
-1. **Pure** -- `Rig.new/2` and `Rig.step/2` return a plain struct. No process, no side effects, no telemetry. Use it in tests, LiveView reducers, Oban workers, scripts.
+1. **Pure** -- `Rig.new/2` and `Rig.crank/2` return a plain struct. No process, no side effects, no telemetry. Use it in tests, LiveView reducers, Oban workers, scripts.
 
 2. **Process** -- `Rig.Server` wraps the same module in `:gen_statem`. Supervision, telemetry, timeouts, replies -- the full OTP toolkit.
 
@@ -33,8 +33,8 @@ end
 machine =
   MyApp.Door
   |> Rig.new()
-  |> Rig.step(:unlock)
-  |> Rig.step(:open)
+  |> Rig.crank(:unlock)
+  |> Rig.crank(:open)
 
 machine.state
 #=> :opened
@@ -91,12 +91,12 @@ end
 ```
 
 ```elixir
-machine = Rig.step(machine, :ship)
+machine = Rig.crank(machine, :ship)
 machine.effects
 #=> [{:state_timeout, 86_400_000, :delivery_timeout}]
 ```
 
-Each `step/2` call replaces `effects` -- they don't accumulate across pipeline stages.
+Each `crank/2` call replaces `effects` -- they don't accumulate across pipeline stages.
 
 ## Enter callbacks
 
@@ -111,7 +111,7 @@ end
 
 ## Stopped machines
 
-`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further steps raise `Rig.StoppedError`. Use `step!/2` in tests to raise immediately on stop results.
+`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further steps raise `Rig.StoppedError`. Use `crank!/2` in tests to raise immediately on stop results.
 
 ## Unhandled events
 

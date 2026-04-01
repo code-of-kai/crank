@@ -6,7 +6,7 @@ defmodule Rig do
   a single callback module with `handle_event/4` (and optionally `on_enter/3`),
   then use it in two ways:
 
-    1. **Pure** — `Rig.new/2` and `Rig.step/2` operate on a `%Rig.Machine{}`
+    1. **Pure** — `Rig.new/2` and `Rig.crank/2` operate on a `%Rig.Machine{}`
        struct with no processes, no side effects, no telemetry. Perfect for
        tests, LiveView reducers, Oban workers, scripts.
 
@@ -19,7 +19,7 @@ defmodule Rig do
   `handle_event/4` takes four arguments: state, event type, event content, and data.
   The event type follows `:gen_statem` exactly:
 
-    * `:internal` — programmatic events (pure steps, `{:next_event, :internal, _}`)
+    * `:internal` — programmatic events (pure cranks, `{:next_event, :internal, _}`)
     * `:cast` — async events via `Rig.Server.cast/2`
     * `{:call, from}` — sync events via `Rig.Server.call/3` (reply with `{:reply, from, reply}`)
     * `:info` — raw messages from linked processes
@@ -63,8 +63,8 @@ defmodule Rig do
       machine =
         MyApp.Door
         |> Rig.new()
-        |> Rig.step(:unlock)
-        |> Rig.step(:open)
+        |> Rig.crank(:unlock)
+        |> Rig.crank(:open)
 
       machine.state
       #=> :opened
@@ -108,7 +108,7 @@ defmodule Rig do
     3. `event_content` — the event payload
     4. `data` — the machine's accumulated data
 
-  In pure usage (`Rig.step/2`), event_type is always `:internal`.
+  In pure usage (`Rig.crank/2`), event_type is always `:internal`.
   Use `_` to ignore it when the clause works in both pure and process contexts.
   """
   @callback handle_event(
@@ -198,23 +198,23 @@ defmodule Rig do
   @doc """
   Step the machine forward by applying a domain event.
 
-  The event type is `:internal` — this is a pure, programmatic step.
+  The event type is `:internal` — this is a pure, programmatic crank.
   Returns the updated `%Rig.Machine{}`. If the callback returns
   `{:stop, reason, data}`, the machine's status becomes `{:stopped, reason}`.
 
-  Each call replaces `effects` with the effects from this step
+  Each call replaces `effects` with the effects from this crank
   only — effects do not accumulate across pipeline stages.
 
   Raises `Rig.StoppedError` if the machine has already stopped.
 
   ## Examples
 
-      machine = Rig.step(machine, :payment_received)
-      machine = Rig.step(machine, {:approve, user})
+      machine = Rig.crank(machine, :payment_received)
+      machine = Rig.crank(machine, {:approve, user})
 
   """
-  @spec step(Machine.t(), term()) :: Machine.t()
-  def step(%Machine{status: {:stopped, reason}} = machine, event) do
+  @spec crank(Machine.t(), term()) :: Machine.t()
+  def crank(%Machine{status: {:stopped, reason}} = machine, event) do
     raise Rig.StoppedError,
           module: machine.module,
           state: machine.state,
@@ -222,19 +222,19 @@ defmodule Rig do
           reason: reason
   end
 
-  def step(%Machine{} = machine, event) do
+  def crank(%Machine{} = machine, event) do
     result = machine.module.handle_event(machine.state, :internal, event, machine.data)
     apply_result(machine, result)
   end
 
   @doc """
-  Like `step/2`, but raises on `{:stop, ...}` results.
+  Like `crank/2`, but raises on `{:stop, ...}` results.
 
   Useful in tests and scripts where a stop is unexpected.
   """
-  @spec step!(Machine.t(), term()) :: Machine.t()
-  def step!(%Machine{} = machine, event) do
-    case step(machine, event) do
+  @spec crank!(Machine.t(), term()) :: Machine.t()
+  def crank!(%Machine{} = machine, event) do
+    case crank(machine, event) do
       %Machine{status: {:stopped, reason}} = stopped ->
         raise Rig.StoppedError,
               module: stopped.module,

@@ -3,7 +3,7 @@ defmodule Rig.Server do
   A thin `:gen_statem` adapter that runs a `Rig` callback module as
   a supervised OTP process.
 
-  The Server delegates all step logic to the pure callback module,
+  The Server delegates all crank logic to the pure callback module,
   then executes any effects (timeouts, replies, postpone, etc.)
   via `:gen_statem`'s action system. It also emits telemetry on every
   successful transition.
