@@ -1,5 +1,6 @@
 defmodule Rig.PureTest do
   use ExUnit.Case, async: true
+  doctest Rig
 
   # ---------------------------------------------------------------------------
   # Test fixtures

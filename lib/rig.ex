@@ -177,8 +177,17 @@ defmodule Rig do
 
   ## Examples
 
-      machine = Rig.new(MyApp.Door)
-      machine = Rig.new(MyApp.Order, order_id: 123)
+      iex> machine = Rig.new(Rig.Examples.Door)
+      iex> machine.state
+      :locked
+      iex> machine.effects
+      []
+      iex> machine.status
+      :running
+
+      iex> machine = Rig.new(Rig.Examples.Turnstile)
+      iex> machine.data
+      %{coins: 0, passes: 0}
 
   """
   @spec new(module(), term()) :: Machine.t()
@@ -196,7 +205,7 @@ defmodule Rig do
   end
 
   @doc """
-  Step the machine forward by applying a domain event.
+  Crank the machine with a domain event, producing a new machine.
 
   The event type is `:internal` — this is a pure, programmatic crank.
   Returns the updated `%Rig.Machine{}`. If the callback returns
@@ -209,8 +218,25 @@ defmodule Rig do
 
   ## Examples
 
-      machine = Rig.crank(machine, :payment_received)
-      machine = Rig.crank(machine, {:approve, user})
+      iex> machine = Rig.new(Rig.Examples.Door) |> Rig.crank(:unlock)
+      iex> machine.state
+      :unlocked
+
+      iex> machine = Rig.new(Rig.Examples.Turnstile) |> Rig.crank(:coin) |> Rig.crank(:push)
+      iex> machine.state
+      :locked
+      iex> machine.data
+      %{coins: 1, passes: 1}
+
+  Pipeline style:
+
+      iex> machine =
+      ...>   Rig.Examples.Door
+      ...>   |> Rig.new()
+      ...>   |> Rig.crank(:unlock)
+      ...>   |> Rig.crank(:open)
+      iex> machine.state
+      :opened
 
   """
   @spec crank(Machine.t(), term()) :: Machine.t()
@@ -231,6 +257,12 @@ defmodule Rig do
   Like `crank/2`, but raises on `{:stop, ...}` results.
 
   Useful in tests and scripts where a stop is unexpected.
+
+  ## Examples
+
+      iex> Rig.new(Rig.Examples.Door) |> Rig.crank!(:unlock) |> Map.get(:state)
+      :unlocked
+
   """
   @spec crank!(Machine.t(), term()) :: Machine.t()
   def crank!(%Machine{} = machine, event) do
@@ -318,6 +350,8 @@ defmodule Rig do
   end
 
   defp validate_module!(module) do
+    Code.ensure_loaded(module)
+
     unless function_exported?(module, :handle_event, 4) do
       raise ArgumentError,
             "#{inspect(module)} does not implement the Rig behaviour " <>
