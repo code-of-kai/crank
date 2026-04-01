@@ -2,8 +2,8 @@ defmodule Rig.PropertyTest do
   @moduledoc """
   Property-based tests for Rig.
 
-  13 invariants. 10 pure (10,000 runs × up to 1,000 events each),
-  3 process (1,000–10,000 runs). ~12 seconds, ~50M random cranks.
+  19 invariants, all at 10,000 runs. Sequences up to 1,000 events.
+  ~100M random cranks in ~20 seconds. Every property at full power.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -261,7 +261,7 @@ defmodule Rig.PropertyTest do
             # Generate events split across N senders
             sender_count <- integer(2..8),
             events_per_sender <- integer(5..30),
-            max_runs: 1_000
+            max_runs: @runs
           ) do
       {:ok, pid} = Rig.Server.start_link(Rig.Examples.Turnstile, [])
 
@@ -304,7 +304,7 @@ defmodule Rig.PropertyTest do
     check all(
             pre_events <- turnstile_event_sequence(50),
             post_events <- turnstile_event_sequence(50),
-            max_runs: 1_000
+            max_runs: @runs
           ) do
       # Start, crank some events, then kill the process
       {:ok, pid} = Rig.Server.start_link(Rig.Examples.Turnstile, [])
@@ -399,7 +399,7 @@ defmodule Rig.PropertyTest do
   end
 
   property "invariant: Order pure/process equivalence (complex machine)" do
-    check all(events <- order_event_sequence(100), max_runs: 1_000) do
+    check all(events <- order_event_sequence(100), max_runs: @runs) do
       pure =
         Enum.reduce(events, Rig.new(Rig.Examples.Order), fn event, m ->
           Rig.crank(m, event)
