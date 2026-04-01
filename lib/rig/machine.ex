@@ -1,20 +1,20 @@
-defmodule Decidable.Machine do
+defmodule Rig.Machine do
   @moduledoc """
   The core data structure representing a finite state machine.
 
-  A `%Decidable.Machine{}` is a pure value — it holds the current state,
-  accumulated data, and any actions produced by the last transition.
-  It never executes side effects. The optional `Decidable.Server` process
-  adapter interprets and executes pending actions; in pure code, you
+  A `%Rig.Machine{}` is a pure value — it holds the current state,
+  accumulated data, and any effects produced by the last step.
+  It never executes side effects. The optional `Rig.Runner` process
+  adapter interprets and executes effects; in pure code, you
   inspect them directly.
 
   ## Fields
 
-    * `:module` — the callback module implementing the `Decidable` behaviour
+    * `:module` — the callback module implementing the `Rig` behaviour
     * `:state` — the current state (any term, typically an atom)
-    * `:data` — arbitrary user data carried through transitions
-    * `:pending_actions` — actions returned by the most recent transition,
-      stored as data for the caller or Server to interpret
+    * `:data` — arbitrary user data carried through steps
+    * `:effects` — effects returned by the most recent step,
+      stored as data for the caller or Runner to interpret
     * `:status` — `:running` or `{:stopped, reason}`
 
   """
@@ -24,7 +24,7 @@ defmodule Decidable.Machine do
     :module,
     :state,
     :data,
-    pending_actions: [],
+    effects: [],
     status: :running
   ]
 
@@ -44,7 +44,7 @@ defmodule Decidable.Machine do
           module: module(),
           state: term(),
           data: term(),
-          pending_actions: [action()],
+          effects: [action()],
           status: :running | {:stopped, term()}
         }
 end

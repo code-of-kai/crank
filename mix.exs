@@ -1,17 +1,17 @@
-defmodule Decidable.MixProject do
+defmodule Rig.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/code-of-kai/Decidable"
+  @source_url "https://github.com/code-of-kai/rig"
 
   def project do
     [
-      app: :decidable,
+      app: :rig,
       version: @version,
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      name: "Decidable",
+      name: "Rig",
       description: "Pure state machines for Elixir — testable data structures first, optional gen_statem process adapter",
       source_url: @source_url,
       package: package(),
@@ -41,7 +41,7 @@ defmodule Decidable.MixProject do
 
   defp docs do
     [
-      main: "Decidable",
+      main: "Rig",
       source_ref: "v#{@version}"
     ]
   end

@@ -1,32 +1,32 @@
-defmodule Decidable.Server do
+defmodule Rig.Server do
   @moduledoc """
-  A thin `:gen_statem` adapter that runs a `Decidable` callback module as
+  A thin `:gen_statem` adapter that runs a `Rig` callback module as
   a supervised OTP process.
 
-  The Server delegates all transition logic to the pure callback module,
-  then executes any `pending_actions` (timeouts, replies, postpone, etc.)
+  The Server delegates all step logic to the pure callback module,
+  then executes any effects (timeouts, replies, postpone, etc.)
   via `:gen_statem`'s action system. It also emits telemetry on every
   successful transition.
 
   ## Usage
 
       defmodule MyApp.DoorServer do
-        use Decidable.Server, logic: MyApp.Door
+        use Rig.Server, logic: MyApp.Door
       end
 
-      {:ok, pid} = Decidable.Server.start_link(MyApp.DoorServer, [])
-      Decidable.Server.cast(pid, :unlock)
+      {:ok, pid} = Rig.Server.start_link(MyApp.DoorServer, [])
+      Rig.Server.cast(pid, :unlock)
 
   Or inline (the logic module *is* the server module):
 
       defmodule MyApp.Door do
-        use Decidable
-        use Decidable.Server
+        use Rig
+        use Rig.Server
 
-        @impl Decidable
+        @impl Rig
         def init(_opts), do: {:ok, :locked, %{}}
 
-        @impl Decidable
+        @impl Rig
         def handle_event(:locked, _, :unlock, data), do: {:next_state, :unlocked, data}
         def handle_event(:unlocked, _, :lock, data), do: {:next_state, :locked, data}
       end
@@ -43,7 +43,7 @@ defmodule Decidable.Server do
       def child_spec(args) do
         %{
           id: __MODULE__,
-          start: {Decidable.Server, :start_link, [@logic_module, args, [name: __MODULE__]]},
+          start: {Rig.Server, :start_link, [@logic_module, args, [name: __MODULE__]]},
           restart: :permanent,
           shutdown: 5000
         }
@@ -58,20 +58,21 @@ defmodule Decidable.Server do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Start a `Decidable.Server` process linked to the caller.
+  Start a `Rig.Server` process linked to the caller.
 
-  `module` is the callback module implementing the `Decidable` behaviour.
+  `module` is the callback module implementing the `Rig` behaviour.
   `args` are passed to `module.init/1`.
-  `opts` supports `:name` for process registration.
+  `opts` supports `:name` for process registration, plus any
+  `:gen_statem` start options (`:debug`, `:spawn_opt`, etc.).
   """
   @spec start_link(module(), term(), keyword()) :: GenServer.on_start()
   def start_link(module, args, opts \\ []) do
-    {name, _opts} = Keyword.pop(opts, :name)
+    {name, gen_opts} = Keyword.pop(opts, :name)
 
     if name do
-      :gen_statem.start_link({:local, name}, Decidable.Server.Impl, {module, args}, [])
+      :gen_statem.start_link({:local, name}, Rig.Server.Adapter, {module, args}, gen_opts)
     else
-      :gen_statem.start_link(Decidable.Server.Impl, {module, args}, [])
+      :gen_statem.start_link(Rig.Server.Adapter, {module, args}, gen_opts)
     end
   end
 
@@ -92,7 +93,7 @@ defmodule Decidable.Server do
   end
 end
 
-defmodule Decidable.Server.Impl do
+defmodule Rig.Server.Adapter do
   @moduledoc false
   @behaviour :gen_statem
 
@@ -103,12 +104,16 @@ defmodule Decidable.Server.Impl do
 
   @impl :gen_statem
   def init({module, args}) do
-    case module.init(args) do
-      {:ok, state, data} ->
-        {:ok, state, %__MODULE__{module: module, data: data}}
+    unless function_exported?(module, :handle_event, 4) do
+      {:stop, {:bad_module, module}}
+    else
+      case module.init(args) do
+        {:ok, state, data} ->
+          {:ok, state, %__MODULE__{module: module, data: data}}
 
-      {:stop, reason} ->
-        {:stop, reason}
+        {:stop, reason} ->
+          {:stop, reason}
+      end
     end
   end
 
@@ -118,15 +123,15 @@ defmodule Decidable.Server.Impl do
     if function_exported?(module, :on_enter, 3) do
       case module.on_enter(old_state, new_state, data) do
         {:keep_state, new_data} ->
-          emit_telemetry(module, old_state, new_state, nil)
+          report(module, old_state, new_state, nil)
           {:keep_state, %{internal | data: new_data}}
 
         {:keep_state, new_data, actions} ->
-          emit_telemetry(module, old_state, new_state, nil)
+          report(module, old_state, new_state, nil)
           {:keep_state, %{internal | data: new_data}, actions}
       end
     else
-      emit_telemetry(module, old_state, new_state, nil)
+      report(module, old_state, new_state, nil)
       :keep_state_and_data
     end
   end
@@ -142,12 +147,12 @@ defmodule Decidable.Server.Impl do
   # ---------------------------------------------------------------------------
 
   defp translate_result({:next_state, new_state, new_data}, internal, event) do
-    emit_telemetry(internal.module, nil, new_state, event)
+    report(internal.module, nil, new_state, event)
     {:next_state, new_state, %{internal | data: new_data}}
   end
 
   defp translate_result({:next_state, new_state, new_data, actions}, internal, event) do
-    emit_telemetry(internal.module, nil, new_state, event)
+    report(internal.module, nil, new_state, event)
     {:next_state, new_state, %{internal | data: new_data}, actions}
   end
 
@@ -171,9 +176,9 @@ defmodule Decidable.Server.Impl do
     {:stop, reason, %{internal | data: new_data}}
   end
 
-  defp emit_telemetry(module, from, to, event) do
+  defp report(module, from, to, event) do
     :telemetry.execute(
-      [:decidable, :transition],
+      [:rig, :transition],
       %{system_time: System.system_time()},
       %{module: module, from: from, to: to, event: event}
     )

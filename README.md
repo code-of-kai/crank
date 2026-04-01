@@ -1,20 +1,20 @@
-# Decidable
+# Rig
 
 Pure state machines for Elixir. Testable data structures first, optional `gen_statem` process adapter.
 
 ## The idea
 
-Most Elixir state machine libraries force you into a process. Decidable doesn't. You write one module with `handle_event/4`, and it works in two contexts:
+Most Elixir state machine libraries force you into a process. Rig doesn't. You write one module with `handle_event/4`, and it works in two contexts:
 
-1. **Pure** -- `Decidable.new/2` and `Decidable.transition/2` return a plain struct. No process, no side effects, no telemetry. Use it in tests, LiveView reducers, Oban workers, scripts.
+1. **Pure** -- `Rig.new/2` and `Rig.step/2` return a plain struct. No process, no side effects, no telemetry. Use it in tests, LiveView reducers, Oban workers, scripts.
 
-2. **Process** -- `Decidable.Server` wraps the same module in `:gen_statem`. Supervision, telemetry, timeouts, replies -- the full OTP toolkit.
+2. **Process** -- `Rig.Server` wraps the same module in `:gen_statem`. Supervision, telemetry, timeouts, replies -- the full OTP toolkit.
 
 ## Quick start
 
 ```elixir
 defmodule MyApp.Door do
-  use Decidable
+  use Rig
 
   @impl true
   def init(_opts), do: {:ok, :locked, %{}}
@@ -32,22 +32,22 @@ end
 ```elixir
 machine =
   MyApp.Door
-  |> Decidable.new()
-  |> Decidable.transition(:unlock)
-  |> Decidable.transition(:open)
+  |> Rig.new()
+  |> Rig.step(:unlock)
+  |> Rig.step(:open)
 
 machine.state
 #=> :opened
 
-machine.pending_actions
+machine.effects
 #=> []
 ```
 
 ### Process usage
 
 ```elixir
-{:ok, pid} = Decidable.Server.start_link(MyApp.Door, [])
-Decidable.Server.cast(pid, :unlock)
+{:ok, pid} = Rig.Server.start_link(MyApp.Door, [])
+Rig.Server.cast(pid, :unlock)
 ```
 
 ## Callback signature
@@ -80,9 +80,9 @@ def handle_event(:waiting, :state_timeout, :expired, data) do
 end
 ```
 
-## Actions as data
+## Effects as data
 
-When a callback returns actions (timeouts, replies, postpone, etc.), the pure core stores them in `machine.pending_actions` as inert data. It never executes them. The Server executes them via `:gen_statem`.
+When a callback returns actions (timeouts, replies, postpone, etc.), the pure core stores them in `machine.effects` as inert data. It never executes them. The Server executes them via `:gen_statem`.
 
 ```elixir
 def handle_event(:paid, _, :ship, data) do
@@ -91,12 +91,12 @@ end
 ```
 
 ```elixir
-machine = Decidable.transition(machine, :ship)
-machine.pending_actions
+machine = Rig.step(machine, :ship)
+machine.effects
 #=> [{:state_timeout, 86_400_000, :delivery_timeout}]
 ```
 
-Each `transition/2` call replaces `pending_actions` -- they don't accumulate across pipeline stages.
+Each `step/2` call replaces `effects` -- they don't accumulate across pipeline stages.
 
 ## Enter callbacks
 
@@ -111,7 +111,7 @@ end
 
 ## Stopped machines
 
-`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further transitions raise `Decidable.StoppedError`. Use `transition!/2` in tests to raise immediately on stop results.
+`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further steps raise `Rig.StoppedError`. Use `step!/2` in tests to raise immediately on stop results.
 
 ## Unhandled events
 
@@ -122,7 +122,7 @@ No catch-all. Unhandled events crash with `FunctionClauseError`. This is deliber
 ```elixir
 def deps do
   [
-    {:decidable, "~> 0.1.0"}
+    {:rig, "~> 0.1.0"}
   ]
 end
 ```

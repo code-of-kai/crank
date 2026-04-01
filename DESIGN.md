@@ -1,8 +1,8 @@
-# Decidable -- Design Specification
+# Rig -- Design Specification
 
 ## Purpose
 
-Decidable models finite state machines as pure, testable data structures first,
+Rig models finite state machines as pure, testable data structures first,
 with an optional thin `:gen_statem` process adapter.
 
 ## Core Principles
@@ -16,28 +16,30 @@ with an optional thin `:gen_statem` process adapter.
 
 ## Architecture
 
-### Layer 1: Pure Core (`Decidable` + `Decidable.Machine`)
+### Layer 1: Pure Core (`Rig` + `Rig.Machine`)
 
-100% usable without any process. The `%Decidable.Machine{}` struct carries:
+100% usable without any process. The `%Rig.Machine{}` struct carries:
 
 - `module` -- the callback module
 - `state` -- current state (any term, typically an atom)
 - `data` -- arbitrary user data
-- `pending_actions` -- actions from the last transition, stored as inert data
+- `effects` -- effects from the last step, stored as inert data
 - `status` -- `:running` or `{:stopped, reason}`
 
-Actions are **never executed** in the pure core. They are carried as data for
-the caller or Server to interpret. Each `transition/2` call replaces (not
-appends) `pending_actions`.
+Effects are **never executed** in the pure core. They are carried as data for
+the caller or Server to interpret. Each `step/2` call replaces (not
+appends) `effects`.
 
-### Layer 2: Process Shell (`Decidable.Server`)
+### Layer 2: Process Shell (`Rig.Server`)
 
-A thin `:gen_statem` adapter (NOT GenServer). Delegates all transition logic to
+A thin `:gen_statem` adapter (NOT GenServer). Delegates all step logic to
 the pure callback module, then:
 
-- Executes pending actions (timeouts, replies, postpone, etc.)
-- Emits `[:decidable, :transition]` telemetry events
+- Executes effects (timeouts, replies, postpone, etc.)
+- Emits `[:rig, :transition]` telemetry events
 - Integrates with supervision trees, `:sys` debugging, hot code reloading
+
+The internal gen_statem implementation lives in `Rig.Server.Adapter`.
 
 ## Behaviour Callbacks
 
@@ -60,9 +62,9 @@ the pure callback module, then:
 
 The `event_type` argument is one of:
 
-- `:internal` -- pure transitions via `Decidable.transition/2`, or `{:next_event, :internal, _}`
-- `:cast` -- async events via `Decidable.Server.cast/2`
-- `{:call, from}` -- sync events via `Decidable.Server.call/3`
+- `:internal` -- pure steps via `Rig.step/2`, or `{:next_event, :internal, _}`
+- `:cast` -- async events via `Rig.Server.cast/2`
+- `{:call, from}` -- sync events via `Rig.Server.call/3`
 - `:info` -- raw messages from linked processes
 - `:timeout` -- event timeouts
 - `:state_timeout` -- state timeouts
@@ -93,25 +95,28 @@ All return values mirror `:gen_statem`:
 - `{:keep_state_and_data, actions}`
 - `{:stop, reason, new_data}`
 
+Invalid returns raise `ArgumentError` with a clear message identifying
+the callback module and state.
+
 ## Key Design Decisions
 
 1. **No `states/0` callback** -- function clauses are the declaration
 2. **State-first in `handle_event/4`** -- the primary discriminator
 3. **Arity-4 with explicit event_type** -- matches gen_statem exactly, no hidden tagging
-4. **`:internal` for pure transitions** -- honest about what a programmatic event is
+4. **`:internal` for pure steps** -- honest about what a programmatic event is
 5. **`on_enter/3` receives old_state** -- essential for cleanup and logging
-6. **Actions are data** -- stored in `pending_actions`, never executed in pure core
-7. **pending_actions replace, not accumulate** -- each transition starts fresh
+6. **Effects are data** -- stored in `effects`, never executed in pure core
+7. **Effects replace, not accumulate** -- each step starts fresh
 8. **Bare `%Machine{}` returns** -- enables pipeline ergonomics without tuple unwrapping
 9. **No catch-all defaults** -- unhandled events crash (FunctionClauseError)
 10. **No `current_state/1`** -- use `:sys.get_state` for debugging
 11. **Telemetry in Server only** -- pure core has zero side effects
+12. **Module validation at init** -- `Rig.new/2` and `Rig.Server.Adapter.init/1` verify the module implements `handle_event/4`
 
 ## Server Event Type Passthrough
 
 The Server passes gen_statem event types directly to `handle_event/4` with
-no translation. The callback receives the exact same event_type that
-`:gen_statem` provides:
+no translation:
 
 | gen_statem event type | Callback receives |
 |---|---|

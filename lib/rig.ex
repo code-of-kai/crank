@@ -1,27 +1,27 @@
-defmodule Decidable do
+defmodule Rig do
   @moduledoc """
   A behaviour for finite state machines as pure, testable data structures.
 
-  Decidable separates state machine logic from process concerns. You implement
+  Rig separates state machine logic from process concerns. You implement
   a single callback module with `handle_event/4` (and optionally `on_enter/3`),
   then use it in two ways:
 
-    1. **Pure** — `Decidable.new/2` and `Decidable.transition/2` operate on a
-       `%Decidable.Machine{}` struct with no processes, no side effects, no telemetry.
-       Perfect for tests, LiveView reducers, Oban workers, scripts.
+    1. **Pure** — `Rig.new/2` and `Rig.step/2` operate on a `%Rig.Machine{}`
+       struct with no processes, no side effects, no telemetry. Perfect for
+       tests, LiveView reducers, Oban workers, scripts.
 
-    2. **Process** — `Decidable.Server` wraps the same module in a `:gen_statem`
-       process, executing pending actions, emitting telemetry, and integrating
-       with supervision trees.
+    2. **Process** — `Rig.Server` wraps the same module in a `:gen_statem`
+       process, executing effects, emitting telemetry, and integrating with
+       supervision trees.
 
   ## Callback Signature
 
   `handle_event/4` takes four arguments: state, event type, event content, and data.
   The event type follows `:gen_statem` exactly:
 
-    * `:internal` — programmatic events (pure transitions, `{:next_event, :internal, _}`)
-    * `:cast` — async events via `Decidable.Server.cast/2`
-    * `{:call, from}` — sync events via `Decidable.Server.call/3` (reply with `{:reply, from, reply}`)
+    * `:internal` — programmatic events (pure steps, `{:next_event, :internal, _}`)
+    * `:cast` — async events via `Rig.Server.cast/2`
+    * `{:call, from}` — sync events via `Rig.Server.call/3` (reply with `{:reply, from, reply}`)
     * `:info` — raw messages from linked processes
     * `:timeout` / `:state_timeout` / `{:timeout, name}` — timer events
 
@@ -31,13 +31,12 @@ defmodule Decidable do
   ## Example
 
       defmodule MyApp.Door do
-        use Decidable
+        use Rig
 
         @impl true
         def init(_opts), do: {:ok, :locked, %{}}
 
         @impl true
-        # Pure domain events — ignore event type with _
         def handle_event(:locked, _, :unlock, data) do
           {:next_state, :unlocked, data}
         end
@@ -54,7 +53,7 @@ defmodule Decidable do
           {:next_state, :unlocked, data}
         end
 
-        # Server-only: reply to synchronous calls
+        # Runner-only: reply to synchronous calls
         def handle_event(state, {:call, from}, :status, data) do
           {:keep_state, data, [{:reply, from, state}]}
         end
@@ -63,16 +62,16 @@ defmodule Decidable do
       # Pure usage — no process needed
       machine =
         MyApp.Door
-        |> Decidable.new()
-        |> Decidable.transition(:unlock)
-        |> Decidable.transition(:open)
+        |> Rig.new()
+        |> Rig.step(:unlock)
+        |> Rig.step(:open)
 
       machine.state
       #=> :opened
 
   """
 
-  alias Decidable.Machine
+  alias Rig.Machine
 
   # ---------------------------------------------------------------------------
   # Types
@@ -109,7 +108,7 @@ defmodule Decidable do
     3. `event_content` — the event payload
     4. `data` — the machine's accumulated data
 
-  In pure usage (`Decidable.transition/2`), event_type is always `:internal`.
+  In pure usage (`Rig.step/2`), event_type is always `:internal`.
   Use `_` to ignore it when the clause works in both pure and process contexts.
   """
   @callback handle_event(
@@ -150,12 +149,12 @@ defmodule Decidable do
 
   defmacro __using__(opts) do
     quote location: :keep do
-      @behaviour Decidable
+      @behaviour Rig
 
       def child_spec(args) do
         %{
           id: __MODULE__,
-          start: {Decidable.Server, :start_link, [__MODULE__, args, []]},
+          start: {Rig.Server, :start_link, [__MODULE__, args, []]},
           restart: unquote(Keyword.get(opts, :restart, :permanent)),
           shutdown: unquote(Keyword.get(opts, :shutdown, 5000))
         }
@@ -172,17 +171,20 @@ defmodule Decidable do
   @doc """
   Create a new machine from a callback module.
 
-  Calls `module.init(args)` and returns a `%Decidable.Machine{}` struct.
-  Raises on `{:stop, reason}` from init.
+  Calls `module.init(args)` and returns a `%Rig.Machine{}` struct.
+  Raises on `{:stop, reason}` from init, or if the module doesn't
+  implement the `Rig` behaviour.
 
   ## Examples
 
-      machine = Decidable.new(MyApp.Door)
-      machine = Decidable.new(MyApp.Order, order_id: 123)
+      machine = Rig.new(MyApp.Door)
+      machine = Rig.new(MyApp.Order, order_id: 123)
 
   """
   @spec new(module(), term()) :: Machine.t()
   def new(module, args \\ []) do
+    validate_module!(module)
+
     case module.init(args) do
       {:ok, state, data} ->
         %Machine{module: module, state: state, data: data}
@@ -194,47 +196,47 @@ defmodule Decidable do
   end
 
   @doc """
-  Apply a domain event to the machine, producing a new machine.
+  Step the machine forward by applying a domain event.
 
-  The event type is `:internal` — this is a pure, programmatic transition.
-  Returns the updated `%Decidable.Machine{}`. If the callback returns
+  The event type is `:internal` — this is a pure, programmatic step.
+  Returns the updated `%Rig.Machine{}`. If the callback returns
   `{:stop, reason, data}`, the machine's status becomes `{:stopped, reason}`.
 
-  Each call replaces `pending_actions` with the actions from this transition
-  only — actions do not accumulate across pipeline stages.
+  Each call replaces `effects` with the effects from this step
+  only — effects do not accumulate across pipeline stages.
 
-  Raises `Decidable.StoppedError` if the machine has already stopped.
+  Raises `Rig.StoppedError` if the machine has already stopped.
 
   ## Examples
 
-      machine = Decidable.transition(machine, :payment_received)
-      machine = Decidable.transition(machine, {:approve, user})
+      machine = Rig.step(machine, :payment_received)
+      machine = Rig.step(machine, {:approve, user})
 
   """
-  @spec transition(Machine.t(), term()) :: Machine.t()
-  def transition(%Machine{status: {:stopped, reason}} = machine, event) do
-    raise Decidable.StoppedError,
+  @spec step(Machine.t(), term()) :: Machine.t()
+  def step(%Machine{status: {:stopped, reason}} = machine, event) do
+    raise Rig.StoppedError,
           module: machine.module,
           state: machine.state,
           event: event,
           reason: reason
   end
 
-  def transition(%Machine{} = machine, event) do
+  def step(%Machine{} = machine, event) do
     result = machine.module.handle_event(machine.state, :internal, event, machine.data)
     apply_result(machine, result)
   end
 
   @doc """
-  Like `transition/2`, but raises on `{:stop, ...}` results.
+  Like `step/2`, but raises on `{:stop, ...}` results.
 
   Useful in tests and scripts where a stop is unexpected.
   """
-  @spec transition!(Machine.t(), term()) :: Machine.t()
-  def transition!(%Machine{} = machine, event) do
-    case transition(machine, event) do
+  @spec step!(Machine.t(), term()) :: Machine.t()
+  def step!(%Machine{} = machine, event) do
+    case step(machine, event) do
       %Machine{status: {:stopped, reason}} = stopped ->
-        raise Decidable.StoppedError,
+        raise Rig.StoppedError,
               module: stopped.module,
               state: stopped.state,
               event: event,
@@ -251,41 +253,47 @@ defmodule Decidable do
 
   defp apply_result(machine, {:next_state, new_state, new_data}) do
     machine
-    |> put_transition(new_state, new_data, [])
-    |> maybe_on_enter(machine.state)
+    |> move_to(new_state, new_data, [])
+    |> check_enter_hook(machine.state)
   end
 
   defp apply_result(machine, {:next_state, new_state, new_data, actions}) do
     machine
-    |> put_transition(new_state, new_data, actions)
-    |> maybe_on_enter(machine.state)
+    |> move_to(new_state, new_data, actions)
+    |> check_enter_hook(machine.state)
   end
 
   defp apply_result(machine, {:keep_state, new_data}) do
-    %{machine | data: new_data, pending_actions: []}
+    %{machine | data: new_data, effects: []}
   end
 
   defp apply_result(machine, {:keep_state, new_data, actions}) do
-    %{machine | data: new_data, pending_actions: List.wrap(actions)}
+    %{machine | data: new_data, effects: List.wrap(actions)}
   end
 
   defp apply_result(machine, :keep_state_and_data) do
-    %{machine | pending_actions: []}
+    %{machine | effects: []}
   end
 
   defp apply_result(machine, {:keep_state_and_data, actions}) do
-    %{machine | pending_actions: List.wrap(actions)}
+    %{machine | effects: List.wrap(actions)}
   end
 
   defp apply_result(machine, {:stop, reason, new_data}) do
-    %{machine | data: new_data, status: {:stopped, reason}, pending_actions: []}
+    %{machine | data: new_data, status: {:stopped, reason}, effects: []}
   end
 
-  defp put_transition(machine, new_state, new_data, actions) do
-    %{machine | state: new_state, data: new_data, pending_actions: List.wrap(actions)}
+  defp apply_result(%Machine{module: module, state: state}, invalid) do
+    raise ArgumentError,
+          "#{inspect(module)}.handle_event/4 in state #{inspect(state)} " <>
+            "returned invalid result: #{inspect(invalid)}"
   end
 
-  defp maybe_on_enter(
+  defp move_to(machine, new_state, new_data, actions) do
+    %{machine | state: new_state, data: new_data, effects: List.wrap(actions)}
+  end
+
+  defp check_enter_hook(
          %Machine{module: module, state: new_state, data: data} = machine,
          old_state
        ) do
@@ -297,10 +305,23 @@ defmodule Decidable do
         {:keep_state, new_data, enter_actions} ->
           %{machine |
             data: new_data,
-            pending_actions: machine.pending_actions ++ List.wrap(enter_actions)}
+            effects: machine.effects ++ List.wrap(enter_actions)}
+
+        invalid ->
+          raise ArgumentError,
+                "#{inspect(module)}.on_enter/3 (#{inspect(old_state)} → #{inspect(new_state)}) " <>
+                  "returned invalid result: #{inspect(invalid)}"
       end
     else
       machine
+    end
+  end
+
+  defp validate_module!(module) do
+    unless function_exported?(module, :handle_event, 4) do
+      raise ArgumentError,
+            "#{inspect(module)} does not implement the Rig behaviour " <>
+              "(missing handle_event/4)"
     end
   end
 end

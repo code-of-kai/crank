@@ -1,12 +1,12 @@
-defmodule Decidable.PureTest do
+defmodule Rig.PureTest do
   use ExUnit.Case, async: true
 
   # ---------------------------------------------------------------------------
-  # Test fixtures — minimal state machines (arity-4 handle_event)
+  # Test fixtures
   # ---------------------------------------------------------------------------
 
   defmodule Door do
-    use Decidable
+    use Rig
 
     @impl true
     def init(_opts), do: {:ok, :locked, %{}}
@@ -19,7 +19,7 @@ defmodule Decidable.PureTest do
   end
 
   defmodule Order do
-    use Decidable
+    use Rig
 
     @impl true
     def init(opts) do
@@ -61,7 +61,7 @@ defmodule Decidable.PureTest do
   end
 
   defmodule WithEnter do
-    use Decidable
+    use Rig
 
     @impl true
     def init(_opts), do: {:ok, :idle, %{entered: []}}
@@ -81,7 +81,7 @@ defmodule Decidable.PureTest do
   end
 
   defmodule WithEnterActions do
-    use Decidable
+    use Rig
 
     @impl true
     def init(_opts), do: {:ok, :a, %{}}
@@ -98,7 +98,7 @@ defmodule Decidable.PureTest do
   end
 
   defmodule FailInit do
-    use Decidable
+    use Rig
 
     @impl true
     def init(_opts), do: {:stop, :bad_config}
@@ -108,23 +108,23 @@ defmodule Decidable.PureTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Tests — Decidable.new/2
+  # Tests — Rig.new/2
   # ---------------------------------------------------------------------------
 
-  describe "Decidable.new/2" do
+  describe "Rig.new/2" do
     test "creates a machine with initial state and data" do
-      machine = Decidable.new(Door)
+      machine = Rig.new(Door)
 
-      assert %Decidable.Machine{} = machine
+      assert %Rig.Machine{} = machine
       assert machine.module == Door
       assert machine.state == :locked
       assert machine.data == %{}
-      assert machine.pending_actions == []
+      assert machine.effects == []
       assert machine.status == :running
     end
 
     test "passes args to init/1" do
-      machine = Decidable.new(Order, order_id: 42, amount: 100)
+      machine = Rig.new(Order, order_id: 42, amount: 100)
 
       assert machine.state == :pending
       assert machine.data.order_id == 42
@@ -133,21 +133,27 @@ defmodule Decidable.PureTest do
 
     test "raises on {:stop, reason} from init" do
       assert_raise ArgumentError, ~r/bad_config/, fn ->
-        Decidable.new(FailInit)
+        Rig.new(FailInit)
+      end
+    end
+
+    test "raises on module that doesn't implement Rig behaviour" do
+      assert_raise ArgumentError, ~r/does not implement the Rig behaviour/, fn ->
+        Rig.new(String)
       end
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Tests — Decidable.transition/2
+  # Tests — Rig.step/2
   # ---------------------------------------------------------------------------
 
-  describe "Decidable.transition/2" do
-    test "transitions to a new state" do
+  describe "Rig.step/2" do
+    test "steps to a new state" do
       machine =
         Door
-        |> Decidable.new()
-        |> Decidable.transition(:unlock)
+        |> Rig.new()
+        |> Rig.step(:unlock)
 
       assert machine.state == :unlocked
     end
@@ -155,118 +161,115 @@ defmodule Decidable.PureTest do
     test "pipeline through multiple states" do
       machine =
         Door
-        |> Decidable.new()
-        |> Decidable.transition(:unlock)
-        |> Decidable.transition(:open)
+        |> Rig.new()
+        |> Rig.step(:unlock)
+        |> Rig.step(:open)
 
       assert machine.state == :opened
     end
 
-    test "stores pending actions from {:next_state, _, _, actions}" do
+    test "stores effects from {:next_state, _, _, actions}" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition(:pay)
-        |> Decidable.transition(:ship)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step(:pay)
+        |> Rig.step(:ship)
 
       assert machine.state == :shipped
-      assert machine.pending_actions == [{:state_timeout, 86_400_000, :delivery_timeout}]
+      assert machine.effects == [{:state_timeout, 86_400_000, :delivery_timeout}]
     end
 
-    test "each transition replaces pending_actions (no accumulation)" do
+    test "each step replaces effects (no accumulation)" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition(:pay)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step(:pay)
 
-      # :pay returns {:next_state, :paid, data} with no actions
-      assert machine.pending_actions == []
+      assert machine.effects == []
 
-      machine = Decidable.transition(machine, :ship)
-      assert machine.pending_actions == [{:state_timeout, 86_400_000, :delivery_timeout}]
+      machine = Rig.step(machine, :ship)
+      assert machine.effects == [{:state_timeout, 86_400_000, :delivery_timeout}]
 
-      # A keep_state transition clears them
-      machine = Decidable.transition(machine, :keep)
-      assert machine.pending_actions == []
+      machine = Rig.step(machine, :keep)
+      assert machine.effects == []
     end
 
     test "handles {:keep_state, new_data}" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition(:keep)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step(:keep)
 
       assert machine.state == :pending
-      assert machine.pending_actions == []
+      assert machine.effects == []
     end
 
     test "handles {:keep_state, new_data, actions}" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition(:keep_with_actions)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step(:keep_with_actions)
 
       assert machine.state == :pending
-      assert machine.pending_actions == [{:state_timeout, 1000, :nudge}]
+      assert machine.effects == [{:state_timeout, 1000, :nudge}]
     end
 
     test "handles :keep_state_and_data" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition(:noop)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step(:noop)
 
       assert machine.state == :pending
-      assert machine.pending_actions == []
+      assert machine.effects == []
     end
 
     test "handles {:keep_state_and_data, actions}" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition(:noop_with_actions)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step(:noop_with_actions)
 
       assert machine.state == :pending
-      assert machine.pending_actions == [{:state_timeout, 2000, :nag}]
+      assert machine.effects == [{:state_timeout, 2000, :nag}]
     end
 
     test "handles {:stop, reason, data}" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition(:pay)
-        |> Decidable.transition(:cancel)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step(:pay)
+        |> Rig.step(:cancel)
 
       assert machine.status == {:stopped, :cancelled}
       assert machine.state == :paid
       assert machine.data.cancelled_at == :now
-      assert machine.pending_actions == []
+      assert machine.effects == []
     end
 
-    test "raises StoppedError when transitioning a stopped machine" do
+    test "raises StoppedError when stepping a stopped machine" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition(:pay)
-        |> Decidable.transition(:cancel)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step(:pay)
+        |> Rig.step(:cancel)
 
-      assert_raise Decidable.StoppedError, ~r/machine is stopped/, fn ->
-        Decidable.transition(machine, :ship)
+      assert_raise Rig.StoppedError, ~r/machine is stopped/, fn ->
+        Rig.step(machine, :ship)
       end
     end
 
     test "unhandled event raises FunctionClauseError (let it crash)" do
-      machine = Decidable.new(Door)
+      machine = Rig.new(Door)
 
       assert_raise FunctionClauseError, fn ->
-        Decidable.transition(machine, :nonexistent_event)
+        Rig.step(machine, :nonexistent_event)
       end
     end
 
-    test "event_type is :internal in pure transitions" do
-      # This module distinguishes event types to prove :internal is used
+    test "event_type is :internal in pure steps" do
       defmodule EventTypeProbe do
-        use Decidable
+        use Rig
 
         @impl true
         def init(_), do: {:ok, :idle, %{}}
@@ -279,23 +282,41 @@ defmodule Decidable.PureTest do
 
       machine =
         EventTypeProbe
-        |> Decidable.new()
-        |> Decidable.transition(:go)
+        |> Rig.new()
+        |> Rig.step(:go)
 
       assert machine.data.event_type == :internal
+    end
+
+    test "raises ArgumentError on invalid callback return" do
+      defmodule BadReturn do
+        use Rig
+
+        @impl true
+        def init(_), do: {:ok, :idle, %{}}
+
+        @impl true
+        def handle_event(:idle, _, :go, _data), do: {:error, :oops}
+      end
+
+      machine = Rig.new(BadReturn)
+
+      assert_raise ArgumentError, ~r/returned invalid result/, fn ->
+        Rig.step(machine, :go)
+      end
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Tests — Decidable.transition!/2
+  # Tests — Rig.step!/2
   # ---------------------------------------------------------------------------
 
-  describe "Decidable.transition!/2" do
+  describe "Rig.step!/2" do
     test "returns machine on success" do
       machine =
         Door
-        |> Decidable.new()
-        |> Decidable.transition!(:unlock)
+        |> Rig.new()
+        |> Rig.step!(:unlock)
 
       assert machine.state == :unlocked
     end
@@ -303,11 +324,11 @@ defmodule Decidable.PureTest do
     test "raises on stop result" do
       machine =
         Order
-        |> Decidable.new(order_id: 1, amount: 50)
-        |> Decidable.transition!(:pay)
+        |> Rig.new(order_id: 1, amount: 50)
+        |> Rig.step!(:pay)
 
-      assert_raise Decidable.StoppedError, fn ->
-        Decidable.transition!(machine, :cancel)
+      assert_raise Rig.StoppedError, fn ->
+        Rig.step!(machine, :cancel)
       end
     end
   end
@@ -320,45 +341,42 @@ defmodule Decidable.PureTest do
     test "called on state transitions with old and new state" do
       machine =
         WithEnter
-        |> Decidable.new()
-        |> Decidable.transition(:go)
+        |> Rig.new()
+        |> Rig.step(:go)
 
       assert machine.state == :running
       assert machine.data.entered == [{:idle, :running}]
     end
 
-    test "called on each transition in a pipeline" do
+    test "called on each step in a pipeline" do
       machine =
         WithEnter
-        |> Decidable.new()
-        |> Decidable.transition(:go)
-        |> Decidable.transition(:stop)
+        |> Rig.new()
+        |> Rig.step(:go)
+        |> Rig.step(:stop)
 
-      # Most recent first (prepended)
       assert machine.data.entered == [{:running, :idle}, {:idle, :running}]
     end
 
-    test "on_enter actions are appended to handle_event actions" do
+    test "on_enter effects are appended to handle_event effects" do
       machine =
         WithEnterActions
-        |> Decidable.new()
-        |> Decidable.transition(:go)
+        |> Rig.new()
+        |> Rig.step(:go)
 
       assert machine.state == :b
-      # handle_event returned no actions, on_enter added one
-      assert machine.pending_actions == [{:state_timeout, 3000, :b_timeout}]
+      assert machine.effects == [{:state_timeout, 3000, :b_timeout}]
     end
 
-    test "handle_event actions + on_enter actions combine" do
+    test "handle_event effects + on_enter effects combine" do
       machine =
         WithEnter
-        |> Decidable.new()
-        |> Decidable.transition(:go)
-        |> Decidable.transition(:go_with_actions)
+        |> Rig.new()
+        |> Rig.step(:go)
+        |> Rig.step(:go_with_actions)
 
       assert machine.state == :finishing
-      # handle_event's action preserved, on_enter didn't add new actions (just data)
-      assert machine.pending_actions == [{:state_timeout, 5000, :wrap_up}]
+      assert machine.effects == [{:state_timeout, 5000, :wrap_up}]
     end
   end
 
@@ -366,10 +384,10 @@ defmodule Decidable.PureTest do
   # Tests — Machine struct
   # ---------------------------------------------------------------------------
 
-  describe "Decidable.Machine struct" do
+  describe "Rig.Machine struct" do
     test "enforces required keys" do
       assert_raise ArgumentError, fn ->
-        struct!(Decidable.Machine, [])
+        struct!(Rig.Machine, [])
       end
     end
   end
