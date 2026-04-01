@@ -53,7 +53,7 @@ defmodule Rig do
           {:next_state, :unlocked, data}
         end
 
-        # Runner-only: reply to synchronous calls
+        # Server-only: reply to synchronous calls
         def handle_event(state, {:call, from}, :status, data) do
           {:keep_state, data, [{:reply, from, state}]}
         end
@@ -77,14 +77,46 @@ defmodule Rig do
   # Types
   # ---------------------------------------------------------------------------
 
+  @typedoc """
+  The type of event being delivered to `handle_event/4`.
+
+  Matches `:gen_statem` event types exactly. In pure code (via `crank/2`),
+  the event type is always `:internal`.
+  """
   @type event_type ::
           :internal
           | :cast
-          | {:call, GenServer.from()}
+          | {:call, from :: GenServer.from()}
           | :info
           | :timeout
           | :state_timeout
-          | {:timeout, term()}
+          | {:timeout, name :: term()}
+
+  @typedoc "Result of `init/1`."
+  @type init_result ::
+          {:ok, state :: term(), data :: term()}
+          | {:stop, reason :: term()}
+
+  @typedoc """
+  Result of `handle_event/4`.
+
+  Named type so it can be referenced in specs and documentation.
+  Mirrors `:gen_statem` return values exactly.
+  """
+  @type handle_event_result ::
+          {:next_state, new_state :: term(), new_data :: term()}
+          | {:next_state, new_state :: term(), new_data :: term(),
+             actions :: [Machine.action()]}
+          | {:keep_state, new_data :: term()}
+          | {:keep_state, new_data :: term(), actions :: [Machine.action()]}
+          | :keep_state_and_data
+          | {:keep_state_and_data, actions :: [Machine.action()]}
+          | {:stop, reason :: term(), new_data :: term()}
+
+  @typedoc "Result of `on_enter/3`."
+  @type on_enter_result ::
+          {:keep_state, new_data :: term()}
+          | {:keep_state, new_data :: term(), actions :: [Machine.action()]}
 
   # ---------------------------------------------------------------------------
   # Behaviour callbacks
@@ -93,9 +125,7 @@ defmodule Rig do
   @doc """
   Initialise the machine. Return the starting state and data.
   """
-  @callback init(args :: term()) ::
-              {:ok, state :: term(), data :: term()}
-              | {:stop, reason :: term()}
+  @callback init(args :: term()) :: init_result()
 
   @doc """
   Handle an event in the current state.
@@ -106,7 +136,7 @@ defmodule Rig do
     2. `event_type` — `:internal`, `:cast`, `{:call, from}`, `:info`, `:timeout`,
        `:state_timeout`, or `{:timeout, name}`
     3. `event_content` — the event payload
-    4. `data` — the machine's accumulated data
+    4. `data` ��� the machine's accumulated data
 
   In pure usage (`Rig.crank/2`), event_type is always `:internal`.
   Use `_` to ignore it when the clause works in both pure and process contexts.
@@ -116,15 +146,7 @@ defmodule Rig do
               event_type :: event_type(),
               event_content :: term(),
               data :: term()
-            ) ::
-              {:next_state, new_state :: term(), new_data :: term()}
-              | {:next_state, new_state :: term(), new_data :: term(),
-                 actions :: [Machine.action()]}
-              | {:keep_state, new_data :: term()}
-              | {:keep_state, new_data :: term(), actions :: [Machine.action()]}
-              | :keep_state_and_data
-              | {:keep_state_and_data, actions :: [Machine.action()]}
-              | {:stop, reason :: term(), new_data :: term()}
+            ) :: handle_event_result()
 
   @doc """
   Called after entering a new state. Optional.
@@ -137,9 +159,7 @@ defmodule Rig do
               old_state :: term(),
               new_state :: term(),
               data :: term()
-            ) ::
-              {:keep_state, new_data :: term()}
-              | {:keep_state, new_data :: term(), actions :: [Machine.action()]}
+            ) :: on_enter_result()
 
   @optional_callbacks [on_enter: 3]
 
@@ -239,7 +259,7 @@ defmodule Rig do
       :opened
 
   """
-  @spec crank(Machine.t(), term()) :: Machine.t()
+  @spec crank(Machine.t(), event_content :: term()) :: Machine.t()
   def crank(%Machine{status: {:stopped, reason}} = machine, event) do
     raise Rig.StoppedError,
           module: machine.module,
@@ -264,7 +284,7 @@ defmodule Rig do
       :unlocked
 
   """
-  @spec crank!(Machine.t(), term()) :: Machine.t()
+  @spec crank!(Machine.t(), event_content :: term()) :: Machine.t()
   def crank!(%Machine{} = machine, event) do
     case crank(machine, event) do
       %Machine{status: {:stopped, reason}} = stopped ->
@@ -283,6 +303,7 @@ defmodule Rig do
   # Result application (pure)
   # ---------------------------------------------------------------------------
 
+  @spec apply_result(Machine.t(), handle_event_result() | term()) :: Machine.t()
   defp apply_result(machine, {:next_state, new_state, new_data}) do
     machine
     |> move_to(new_state, new_data, [])
@@ -321,10 +342,12 @@ defmodule Rig do
             "returned invalid result: #{inspect(invalid)}"
   end
 
+  @spec move_to(Machine.t(), term(), term(), [Machine.action()]) :: Machine.t()
   defp move_to(machine, new_state, new_data, actions) do
     %{machine | state: new_state, data: new_data, effects: List.wrap(actions)}
   end
 
+  @spec check_enter_hook(Machine.t(), old_state :: term()) :: Machine.t()
   defp check_enter_hook(
          %Machine{module: module, state: new_state, data: data} = machine,
          old_state
@@ -349,6 +372,7 @@ defmodule Rig do
     end
   end
 
+  @spec validate_module!(module()) :: :ok
   defp validate_module!(module) do
     Code.ensure_loaded(module)
 
@@ -357,5 +381,7 @@ defmodule Rig do
             "#{inspect(module)} does not implement the Rig behaviour " <>
               "(missing handle_event/4)"
     end
+
+    :ok
   end
 end

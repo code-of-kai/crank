@@ -33,6 +33,12 @@ defmodule Rig.Server do
 
   """
 
+  @typedoc "Server name for process registration."
+  @type server :: GenServer.server()
+
+  @typedoc "Return type for `start_link/3`."
+  @type on_start :: {:ok, pid()} | :ignore | {:error, term()}
+
   @doc false
   defmacro __using__(opts) do
     logic_module = Keyword.get(opts, :logic)
@@ -65,7 +71,7 @@ defmodule Rig.Server do
   `opts` supports `:name` for process registration, plus any
   `:gen_statem` start options (`:debug`, `:spawn_opt`, etc.).
   """
-  @spec start_link(module(), term(), keyword()) :: GenServer.on_start()
+  @spec start_link(module(), args :: term(), keyword()) :: on_start()
   def start_link(module, args, opts \\ []) do
     {name, gen_opts} = Keyword.pop(opts, :name)
 
@@ -79,7 +85,7 @@ defmodule Rig.Server do
   @doc """
   Send an asynchronous event to the server.
   """
-  @spec cast(GenServer.server(), term()) :: :ok
+  @spec cast(server(), event :: term()) :: :ok
   def cast(server, event) do
     :gen_statem.cast(server, event)
   end
@@ -87,7 +93,7 @@ defmodule Rig.Server do
   @doc """
   Send a synchronous event and wait for a reply.
   """
-  @spec call(GenServer.server(), term(), timeout()) :: term()
+  @spec call(server(), event :: term(), timeout()) :: term()
   def call(server, event, timeout \\ 5000) do
     :gen_statem.call(server, event, timeout)
   end
@@ -97,13 +103,22 @@ defmodule Rig.Server.Adapter do
   @moduledoc false
   @behaviour :gen_statem
 
+  @type t :: %__MODULE__{
+          module: module(),
+          data: term()
+        }
+
+  @enforce_keys [:module, :data]
   defstruct [:module, :data]
 
   @impl :gen_statem
   def callback_mode, do: [:handle_event_function, :state_enter]
 
   @impl :gen_statem
+  @spec init({module(), term()}) :: {:ok, term(), t()} | {:stop, term()}
   def init({module, args}) do
+    Code.ensure_loaded(module)
+
     unless function_exported?(module, :handle_event, 4) do
       {:stop, {:bad_module, module}}
     else
@@ -146,6 +161,7 @@ defmodule Rig.Server.Adapter do
   # Result translation — callback returns → gen_statem returns
   # ---------------------------------------------------------------------------
 
+  @spec translate_result(Rig.handle_event_result(), t(), term()) :: term()
   defp translate_result({:next_state, new_state, new_data}, internal, event) do
     report(internal.module, nil, new_state, event)
     {:next_state, new_state, %{internal | data: new_data}}
@@ -176,6 +192,7 @@ defmodule Rig.Server.Adapter do
     {:stop, reason, %{internal | data: new_data}}
   end
 
+  @spec report(module(), term(), term(), term()) :: :ok
   defp report(module, from, to, event) do
     :telemetry.execute(
       [:rig, :transition],
