@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A state machine that starts simpler than GenServer and scales to full OTP supervision without changing a line of logic.
+A finite state machine (FSM) that starts simpler than GenServer and scales to full OTP supervision without changing a line of logic.
 
 `Crank.crank(machine, event)` is a pure function call. No process. No mailbox. No `start_link`. When you need timeouts and supervision, promote to `Crank.Server` -- same callback module, same logic, now running as a supervised `gen_statem`. The promotion is a deployment decision, not a rewrite.
 

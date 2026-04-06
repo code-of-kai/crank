@@ -13,7 +13,7 @@ defmodule Crank.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       name: "Crank",
-      description: "Pure state machines for Elixir — testable data structures first, optional gen_statem process adapter",
+      description: "Pure finite state machines (FSM) for Elixir — testable data structures first, optional gen_statem process adapter",
       source_url: @source_url,
       package: package(),
       docs: docs()
