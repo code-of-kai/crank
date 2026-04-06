@@ -92,6 +92,58 @@ A GenServer with scattered pattern matches across `handle_call` clauses is a dom
 
 The reason people hid their domain models inside GenServers was cost. `gen_statem` added ceremony -- callback modes, process coupling, untestable runtime integration. Crank eliminates that cost. A `handle/3` clause is no more complex than a `handle_call` with pattern matching on `state.status`. Explicit is now as cheap as implicit, so there's no reason to pretend your domain isn't a state machine.
 
+### Functions serve the state machine, not replace it
+
+A common objection: "My domain logic is too complex for a state machine. I have pricing engines, eligibility rules, validation pipelines." But these aren't alternatives to the state machine -- they're tools it uses. A pricing engine is a function you call *inside* `handle/3`:
+
+```elixir
+def handle(:calculate_premium, %Quoted{} = state, data) do
+  premium = PricingEngine.calculate(data.risk_factors, data.coverage)
+  {:next_state, %Quoted{state | premium: premium}, data}
+end
+```
+
+The pricing engine doesn't decide what state to transition to. The state machine decides that. The pricing engine is a pure function that computes a value. Decision tables, eligibility rules, validation pipelines -- they all live inside `handle/3` clauses, called when the state machine determines they're relevant. The state machine is the orchestrator. Everything else is a helper.
+
+This is the relationship domain-driven design calls an *aggregate* -- a cluster of domain objects treated as a single unit, with one root entity (the state machine) controlling all access. Outside code doesn't reach into the pricing engine directly. It sends an event to the aggregate, and the aggregate decides which internal functions to invoke based on its current state. The state machine IS the aggregate root.
+
+### Implicit state machines in existing code
+
+If you come from an object-oriented DDD background, you've written code like this:
+
+```ruby
+class Policy
+  def bind!
+    raise "Can't bind without a quote" unless status == :quoted
+    raise "Can't bind a declined policy" if status == :declined
+    self.status = :bound
+    notify_underwriter
+  end
+end
+```
+
+Every guard clause is a transition rule. Every status check is a state. Every method that changes status is an event handler. This is a state machine -- it's just spread across methods instead of declared in one place. When the rules are simple, it works. When you have fifteen statuses and forty methods that each check three preconditions, the implicit machine becomes unreadable. No one can answer "what are all the ways a policy reaches `:bound`?" without reading every method.
+
+A Crank module answers that question by structure. Each `handle/3` clause declares one transition: this event, in this state, produces this outcome. The set of clauses IS the specification. You can read it top to bottom like a decision table.
+
+### Coordination across aggregates
+
+When multiple state machines need to coordinate -- an order triggers payment, payment triggers fulfillment, fulfillment triggers shipping -- that coordination is itself a state machine. In domain-driven design, this pattern is called a *saga* (sometimes called a *process manager*): a long-running sequence of steps across multiple aggregates, where each step depends on the outcome of the previous one.
+
+A saga has states (waiting for payment, waiting for fulfillment, waiting for shipment), events (payment succeeded, fulfillment completed, shipment confirmed), and transitions (when payment succeeds, request fulfillment). That's a Crank module. The saga doesn't contain the business logic of payment or fulfillment -- it orchestrates them. Each step sends an event to another aggregate and waits for the response:
+
+```elixir
+def handle(:payment_confirmed, :awaiting_payment, data) do
+  {:next_state, :awaiting_fulfillment, data, [{:next_event, :internal, :request_fulfillment}]}
+end
+
+def handle(:fulfillment_complete, :awaiting_fulfillment, data) do
+  {:next_state, :awaiting_shipment, data}
+end
+```
+
+State machines all the way down. The domain objects are state machines. The coordination between them is a state machine. The pattern scales because the abstraction is the same at every level.
+
 ### When you need the process
 
 Crank.Server adds what pure functions can't provide:
@@ -363,7 +415,7 @@ See [DESIGN.md](DESIGN.md) for the full specification and rationale behind every
 ```elixir
 def deps do
   [
-    {:crank, "~> 0.1.0"}
+    {:crank, "~> 0.2.0"}
   ]
 end
 ```
