@@ -8,9 +8,9 @@
 
 Pure state machines for Elixir. Testable data structures first, optional `gen_statem` process adapter.
 
-## What got lost
+## How state machines evolved in Erlang and Elixir
 
-In early Erlang, a state machine was mutually recursive functions:
+**Plain Erlang (1980s--1990s).** Before OTP existed, Erlang state machines were mutually recursive functions. Each state was a function. The process sat inside that function, waiting for a message. When it transitioned, it tail-called into the next state's function:
 
 ```erlang
 locked(Event, Data) ->
@@ -26,23 +26,25 @@ unlocked(Event, Data) ->
     end.
 ```
 
-The state was which function the process was executing. The data available in each state was whatever that function received as arguments -- nothing more. You couldn't accidentally read `policy` inside `locked/2` because `locked/2` was never given a policy. The call stack scoped your data.
+The state was which function the process was executing. The data available in each state was whatever that function received as arguments -- nothing more. You couldn't accidentally read `policy` inside `locked/2` because `locked/2` was never given a policy. The call stack scoped your data. And the logic was just functions -- you could call them directly without a process.
 
-OTP's `gen_fsm` formalized this. Then `gen_statem` replaced `gen_fsm` and added `handle_event_function` mode -- one function, state as a parameter, state can be any term. More flexible, but now you're inside one function with access to everything.
+**`gen_fsm` (OTP, late 1990s).** OTP formalized the pattern into a behaviour. Each state was still a callback function -- `locked/2`, `unlocked/2` -- and the framework dispatched to the right one. This preserved the function-per-state model but coupled it to a process. You couldn't use the logic without starting a `gen_fsm`. The state machine was now inseparable from the process running it.
 
-Then Elixir happened. Most Elixir developers never touched `gen_statem`. They used GenServer, which has no concept of states at all -- just `handle_call`, `handle_cast`, `handle_info` with one blob of data. If you needed a state machine, you put a `:status` atom in that blob and pattern-matched on it. The function-per-state idea didn't carry over from Erlang. It was left behind.
+**`gen_statem` (OTP 19, 2016).** Replaced `gen_fsm` entirely. Added two callback modes: `state_functions` (same as `gen_fsm` -- each state is a function name, state must be an atom) and `handle_event_function` (one function, state is a parameter, state can be any term). The second mode was more flexible but moved further from function-per-state -- you're now inside one function with access to everything, regardless of which state you're in. Still coupled to a process.
 
-Two things got lost in this transition:
+**Elixir and GenServer (2012--present).** Most Elixir developers never touched `gen_statem`. They came from Ruby and JavaScript, not Erlang. GenServer became the primary OTP abstraction, and GenServer has no concept of states at all -- just `handle_call`, `handle_cast`, `handle_info` with one blob of data. If you needed a state machine, you put a `:status` atom in that blob and pattern-matched on it. The function-per-state idea didn't carry over from Erlang. It was left behind.
 
-1. **Data scoping.** In `locked/2`, you could only see what `locked/2` was given. In a GenServer with `%{status: :quoted, violations: [], policy: nil, ...}`, you can see everything, always. Nothing stops you from reading `policy` when the status is `:quoted`.
+Two things changed in this progression:
 
-2. **State machine logic without a process.** Both `gen_fsm` and `gen_statem` fuse state machine logic to a running process. You can't test a transition without starting one. You can't inspect intermediate states without sending messages. You can't pipe events through a chain and look at the result. The logic isn't extractable.
+1. **Data scoping disappeared.** In `locked/2`, you could only see what `locked/2` was given. In a GenServer with `%{status: :quoted, violations: [], policy: nil, ...}`, every handler can see every field. Nothing stops you from reading `policy` when the status is `:quoted`.
+
+2. **State machine logic became inseparable from processes.** In the original Erlang model, state machine logic was just functions calling functions. `gen_fsm` (1990s) coupled it to a process. `gen_statem` (2016) continued that coupling. GenServer dropped the state machine primitives entirely. Each step moved further from state machine logic you could call directly.
 
 ## What Crank recovers
 
-Crank separates the two concerns that OTP fused together: state machine logic and process lifecycle.
+Crank separates the two concerns that OTP fused together in `gen_fsm`: state machine logic and process lifecycle.
 
-The pure core (`Crank.crank/2`) is a function that takes a machine and an event and returns a new machine. No process, no mailbox, no side effects. The process shell (`Crank.Server`) wraps the same callback module in `gen_statem` when you need timeouts, supervision, and telemetry. Same logic, both modes.
+The pure core (`Crank.crank/2`) is a function that takes a machine and an event and returns a new machine. No process, no mailbox, no side effects. The process shell (`Crank.Server`) wraps the same callback module in `gen_statem` when you need timeouts, supervision, and telemetry. Same logic, both modes. Write it once, test it pure, run it in production as a process.
 
 For data scoping, Crank supports struct-per-state -- each state is its own struct with exactly the fields that exist in that state (see [Struct states](#struct-states) below). A `%Quoted{}` can't have a `violations` field because the field doesn't exist on that struct. This recovers the guarantee that Erlang's function-per-state model provided, but as portable data instead of a running process.
 

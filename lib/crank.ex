@@ -2,23 +2,33 @@ defmodule Crank do
   @moduledoc """
   A behaviour for finite state machines as pure, testable data structures.
 
-  ## What got lost
+  ## How state machines evolved
 
-  In early Erlang, a state machine was mutually recursive functions. The state
-  was which function the process was executing. The data available in each state
-  was whatever that function received — nothing more. The call stack scoped your data.
+  In plain Erlang (1980s–1990s), state machines were mutually recursive
+  functions. Each state was a function. The data available in each state was
+  whatever that function received — nothing more. The call stack scoped your
+  data, and the logic was just functions you could call directly.
 
-  OTP formalized this with `gen_fsm`, then replaced it with `gen_statem`. Elixir
-  adopted GenServer as its primary OTP abstraction, and GenServer has no concept
-  of states — just one blob of data with a status atom. The function-per-state
-  model didn't carry over. Two things got lost: data scoping (every handler can
-  see every field) and the ability to use state machine logic without a process.
+  OTP's `gen_fsm` (late 1990s) formalized this into a behaviour but coupled
+  it to a process — you couldn't use the logic without starting one.
+  `gen_statem` (OTP 19, 2016) replaced `gen_fsm` and added
+  `handle_event_function` mode — one function, state as a parameter, state
+  can be any term. More flexible, but now you're inside one function with
+  access to everything. Still coupled to a process.
+
+  Elixir (2012–present) adopted GenServer as its primary abstraction, and
+  GenServer has no state machine primitives at all — just one blob of data
+  with a status atom. Data scoping was lost (every handler sees every field),
+  and state machine logic — which started as plain recursive functions —
+  had been coupled to processes since `gen_fsm` and was now buried inside
+  GenServer handlers.
 
   ## What Crank recovers
 
-  Crank separates the two concerns that OTP fused together: state machine logic
-  and process lifecycle. You implement a single callback module with
-  `handle_event/4` (and optionally `on_enter/3`), then use it in two ways:
+  Crank separates the two concerns that OTP fused together in `gen_fsm`:
+  state machine logic and process lifecycle. You implement a single callback
+  module with `handle_event/4` (and optionally `on_enter/3`), then use it
+  in two ways:
 
     1. **Pure** — `Crank.new/2` and `Crank.crank/2` operate on a `%Crank.Machine{}`
        struct with no processes, no side effects, no telemetry. Perfect for
