@@ -1,135 +1,273 @@
-# Rig
+# Crank
+
+[![License](https://img.shields.io/hexpm/l/crank.svg)](LICENSE)
 
 Pure state machines for Elixir. Testable data structures first, optional `gen_statem` process adapter.
 
-## The idea
+## What got lost
 
-Most Elixir state machine libraries force you into a process. Rig doesn't. You write one module with `handle_event/4`, and it works in two contexts:
+In early Erlang, a state machine was mutually recursive functions:
 
-1. **Pure** -- `Rig.new/2` and `Rig.crank/2` return a plain struct. No process, no side effects, no telemetry. Use it in tests, LiveView reducers, Oban workers, scripts.
+```erlang
+locked(Event, Data) ->
+    case Event of
+        unlock -> unlocked(Data);
+        _      -> locked(Data)
+    end.
 
-2. **Process** -- `Rig.Server` wraps the same module in `:gen_statem`. Supervision, telemetry, timeouts, replies -- the full OTP toolkit.
+unlocked(Event, Data) ->
+    case Event of
+        lock -> locked(Data);
+        open -> opened(Data)
+    end.
+```
+
+The state was which function the process was executing. The data available in each state was whatever that function received as arguments -- nothing more. You couldn't accidentally read `policy` inside `locked/2` because `locked/2` was never given a policy. The call stack scoped your data.
+
+OTP's `gen_fsm` formalized this. Then `gen_statem` replaced `gen_fsm` and added `handle_event_function` mode -- one function, state as a parameter, state can be any term. More flexible, but now you're inside one function with access to everything.
+
+Then Elixir happened. Most Elixir developers never touched `gen_statem`. They used GenServer, which has no concept of states at all -- just `handle_call`, `handle_cast`, `handle_info` with one blob of data. If you needed a state machine, you put a `:status` atom in that blob and pattern-matched on it. The function-per-state idea didn't carry over from Erlang. It was left behind.
+
+Two things got lost in this transition:
+
+1. **Data scoping.** In `locked/2`, you could only see what `locked/2` was given. In a GenServer with `%{status: :quoted, violations: [], policy: nil, ...}`, you can see everything, always. Nothing stops you from reading `policy` when the status is `:quoted`.
+
+2. **Testability without processes.** Both `gen_fsm` and `gen_statem` trap state inside a running process. You can't test a transition without starting one. You can't inspect intermediate states without sending messages. You can't pipe events through a chain and look at the result.
+
+## What Crank recovers
+
+Crank separates the two concerns that OTP fused together: state machine logic and process lifecycle.
+
+The pure core (`Crank.crank/2`) is a function that takes a machine and an event and returns a new machine. No process, no mailbox, no side effects. The process shell (`Crank.Server`) wraps the same callback module in `gen_statem` when you need timeouts, supervision, and telemetry. Same logic, both modes.
+
+For data scoping, Crank supports struct-per-state -- each state is its own struct with exactly the fields that exist in that state (see [Struct states](#struct-states) below). A `%Quoted{}` can't have a `violations` field because the field doesn't exist on that struct. This recovers the guarantee that Erlang's function-per-state model provided, but as portable data instead of a running process.
+
+## Why not just use gen_statem?
+
+You can. Crank's callback signature is `:gen_statem`'s `handle_event_function` mode verbatim -- same arguments, same order -- and the Server is a ~100-line pass-through. If your machine will always live in a process, gen_statem alone is fine.
+
+Crank exists for the cases where that's not enough:
+
+**Property testing.** Crank's test suite runs 26 properties at 10,000 iterations each -- roughly 100 million random cranks in ~20 seconds. That's feasible because `crank/2` returns a struct. No `start_link`/`stop` per iteration, no `:sys.get_state`, no process lifecycle noise. Pure functions compose with StreamData trivially; processes don't.
+
+**Non-process hosts.** LiveView reducers, Oban workers, Phoenix.Channel assigns, ETS-backed workflows -- these are real contexts where you need FSM logic but spawning a gen_statem would be architecturally wrong. With Crank, the same callback module works in both contexts without adaptation.
+
+**Effect inspection.** When a callback returns `[{:state_timeout, 86_400_000, :delivery_timeout}]`, pure code stores it in `machine.effects` as inert data. You can assert on exactly what effects a transition *would* produce without executing them. gen_statem executes effects immediately -- there's no way to inspect intent separately from execution.
+
+**When Crank probably isn't worth it:** If your machine is always supervised, never tested with random sequences, and you don't need the logic outside a process, the pure layer is overhead. Use gen_statem directly.
+
+## How it works
+
+You write one callback module and use it in two contexts:
+
+| | Pure | Process |
+|---|---|---|
+| **API** | `Crank.new/2` + `Crank.crank/2` | `Crank.Server.start_link/3` |
+| **What you get** | A plain `%Crank.Machine{}` struct | A supervised `:gen_statem` process |
+| **Side effects** | None -- effects stored as inert data | Executed by `:gen_statem` |
+| **Telemetry** | None | `[:crank, :transition]` on every state change |
+| **Good for** | Tests, LiveView reducers, Oban workers, scripts | Production supervision, timeouts, replies |
+
+Same module. Same callbacks. Zero process overhead when you don't need it.
 
 ## Quick start
 
+Define a state machine by implementing the `Crank` behaviour:
+
 ```elixir
 defmodule MyApp.Door do
-  use Rig
+  use Crank
 
   @impl true
   def init(_opts), do: {:ok, :locked, %{}}
 
   @impl true
-  def handle_event(:locked, _, :unlock, data), do: {:next_state, :unlocked, data}
-  def handle_event(:unlocked, _, :lock, data), do: {:next_state, :locked, data}
-  def handle_event(:unlocked, _, :open, data), do: {:next_state, :opened, data}
-  def handle_event(:opened, _, :close, data), do: {:next_state, :unlocked, data}
+  def handle_event(_, :unlock, :locked, data), do: {:next_state, :unlocked, data}
+  def handle_event(_, :lock, :unlocked, data), do: {:next_state, :locked, data}
+  def handle_event(_, :open, :unlocked, data), do: {:next_state, :opened, data}
+  def handle_event(_, :close, :opened, data), do: {:next_state, :unlocked, data}
 end
 ```
 
 ### Pure usage
 
+No process, no setup, no cleanup:
+
 ```elixir
 machine =
   MyApp.Door
-  |> Rig.new()
-  |> Rig.crank(:unlock)
-  |> Rig.crank(:open)
+  |> Crank.new()
+  |> Crank.crank(:unlock)
+  |> Crank.crank(:open)
 
-machine.state
-#=> :opened
-
-machine.effects
-#=> []
+machine.state   #=> :opened
+machine.effects #=> []
 ```
 
 ### Process usage
 
-```elixir
-{:ok, pid} = Rig.Server.start_link(MyApp.Door, [])
-Rig.Server.cast(pid, :unlock)
-```
-
-## Callback signature
-
-`handle_event/4` matches `:gen_statem` exactly:
+Full OTP supervision and `:gen_statem` power:
 
 ```elixir
-def handle_event(state, event_type, event_content, data)
+{:ok, pid} = Crank.Server.start_link(MyApp.Door, [])
+Crank.Server.cast(pid, :unlock)
+Crank.Server.call(pid, :status)  # when you have a {:call, from} clause
 ```
 
-- `state` -- current state, the primary pattern match target
-- `event_type` -- `:internal`, `:cast`, `{:call, from}`, `:info`, `:timeout`, `:state_timeout`, `{:timeout, name}`
-- `event_content` -- the event payload
-- `data` -- accumulated machine data
+### Callback signature
 
-In pure code, event_type is always `:internal`. Use `_` to write clauses that work in both contexts:
+`handle_event/4` matches `:gen_statem`'s `handle_event_function` callback mode exactly -- same arguments, same order:
+
+```elixir
+def handle_event(event_type, event_content, state, data)
+```
+
+| Argument | Description |
+|---|---|
+| `event_type` | `:internal`, `:cast`, `{:call, from}`, `:info`, `:timeout`, `:state_timeout`, `{:timeout, name}` |
+| `event_content` | The event payload |
+| `state` | Current state |
+| `data` | Accumulated machine data |
+
+In pure code, `event_type` is always `:internal`. Use `_` for the type to write clauses that work in both contexts:
 
 ```elixir
 # Works everywhere
-def handle_event(:idle, _, :activate, data), do: {:next_state, :active, data}
+def handle_event(_, :activate, :idle, data), do: {:next_state, :active, data}
 
 # Server-only: reply to synchronous calls
-def handle_event(state, {:call, from}, :status, data) do
+def handle_event({:call, from}, :status, state, data) do
   {:keep_state, data, [{:reply, from, state}]}
-end
-
-# Server-only: handle timeouts
-def handle_event(:waiting, :state_timeout, :expired, data) do
-  {:next_state, :timed_out, data}
 end
 ```
 
-## Effects as data
+### Return values
+
+All `:gen_statem` return values are supported:
+
+- `{:next_state, new_state, new_data}`
+- `{:next_state, new_state, new_data, actions}`
+- `{:keep_state, new_data}`
+- `{:keep_state, new_data, actions}`
+- `:keep_state_and_data`
+- `{:keep_state_and_data, actions}`
+- `{:stop, reason, new_data}`
+
+### Effects as data
 
 When a callback returns actions (timeouts, replies, postpone, etc.), the pure core stores them in `machine.effects` as inert data. It never executes them. The Server executes them via `:gen_statem`.
 
 ```elixir
-def handle_event(:paid, _, :ship, data) do
+def handle_event(_, :ship, :paid, data) do
   {:next_state, :shipped, data, [{:state_timeout, 86_400_000, :delivery_timeout}]}
 end
 ```
 
 ```elixir
-machine = Rig.crank(machine, :ship)
+machine = Crank.crank(machine, :ship)
 machine.effects
 #=> [{:state_timeout, 86_400_000, :delivery_timeout}]
 ```
 
 Each `crank/2` call replaces `effects` -- they don't accumulate across pipeline stages.
 
-## Enter callbacks
+### Enter callbacks
 
 Optional `on_enter/3` fires after state changes:
 
 ```elixir
 @impl true
-def on_enter(old_state, new_state, data) do
+def on_enter(_old_state, _new_state, data) do
   {:keep_state, Map.put(data, :entered_at, System.monotonic_time())}
 end
 ```
 
-## Stopped machines
+### Stopped machines
 
-`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further steps raise `Rig.StoppedError`. Use `crank!/2` in tests to raise immediately on stop results.
+`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further cranks raise `Crank.StoppedError`. Use `crank!/2` in tests to raise immediately on stop results.
 
-## Unhandled events
+### Unhandled events
 
 No catch-all. Unhandled events crash with `FunctionClauseError`. This is deliberate -- a state machine that silently ignores events is hiding bugs. Let it crash; let the supervisor handle it.
+
+## Telemetry
+
+`Crank.Server` emits a `[:crank, :transition]` event on every state change with the following metadata:
+
+```elixir
+%{
+  module: MyApp.Door,
+  from: :locked,       # nil on initial enter
+  to: :unlocked,
+  event: :unlock,      # nil on enter
+  data: %{}
+}
+```
+
+Attach handlers for persistence, notifications, audit logging, PubSub -- see the [Hexagonal Architecture guide](guides/hexagonal-architecture.md) for patterns.
+
+## Struct states
+
+The standard Elixir approach is one struct with a `:stage` atom and every field present in every state:
+
+```elixir
+%Submission{stage: :quoted, violations: [], quotes: [...], policy: nil, bound_at: nil}
+# violations shouldn't be here. policy shouldn't be here.
+# But nothing stops it. You have to know which fields matter.
+```
+
+Crank supports an alternative: each state is its own struct. The struct defines exactly what data exists in that state. No optional fields, no "only set when the state is X" comments:
+
+```elixir
+defmodule Validating, do: defstruct violations: []
+defmodule Quoted,     do: defstruct quotes: [], selected: nil
+defmodule Bound,      do: defstruct quote: nil, bound_at: nil
+defmodule Declined,   do: defstruct reason: nil
+```
+
+This works today because `Crank.Machine.state` is `term()` -- atoms, structs, tagged tuples all work. Pattern matching on the struct type gives you the state and its data in one destructure:
+
+```elixir
+def handle_event(_, :bind, %Quoted{selected: sel}, data) when sel != nil do
+  {:next_state, %Bound{quote: sel, bound_at: :now}, data}
+end
+```
+
+State-specific data lives in the struct. Cross-cutting concerns (parameters, audit logs) live in `data`. When a field changes on the current state struct, use `{:next_state, %SameType{updated}, data}` -- the state value changed, so it's a transition. `:keep_state` is reserved for `data`-only changes.
+
+The type annotations are written for Elixir's set-theoretic type system:
+
+```elixir
+@type state :: Validating.t() | Quoted.t() | Bound.t() | Declined.t()
+```
+
+When the compiler can check this (expected mid-2026+), unhandled state variants will produce compiler warnings with zero code changes. Until then, property tests enforce the same guarantee dynamically -- see `Crank.Examples.Submission` for the full example.
+
+## Design principles
+
+- **Pure core, effectful shell.** Business logic is pure data transformation. Side effects live at the boundary.
+- **No magic.** Crank passes `:gen_statem` types and return values through unchanged. If you know `:gen_statem`, you know Crank.
+- **No hidden state.** No `states/0` callback, no registered names, no catch-all defaults. Function clauses declare the machine.
+- **Let it crash.** Unhandled events are bugs. Crank surfaces them immediately.
+- **~400 lines.** Small enough to read in one sitting. No framework, just a library.
+
+See [DESIGN.md](DESIGN.md) for the full specification and rationale behind every decision.
 
 ## Installation
 
 ```elixir
 def deps do
   [
-    {:rig_fsm, "~> 0.1.0"}
+    {:crank, "~> 0.1.0"}
   ]
 end
 ```
 
-## Design
+## Documentation
 
-See [DESIGN.md](DESIGN.md) for the full specification and rationale behind every decision.
+- [DESIGN.md](DESIGN.md) -- Full specification and design rationale
+- [Hexagonal Architecture guide](guides/hexagonal-architecture.md) -- Integration patterns for persistence, notifications, and audit logging
+- [CHANGELOG.md](CHANGELOG.md) -- Version history
 
 ## License
 

@@ -1,10 +1,10 @@
-# Hexagonal Architecture with Rig
+# Hexagonal Architecture with Crank
 
-Rig is already hexagonal. This guide shows you how to see it and use it.
+Crank is already hexagonal. This guide shows you how to see it and use it.
 
 ## The architecture you already have
 
-Rig has two layers:
+Crank has two layers:
 
 ```
                     ┌─────────────────────────┐
@@ -18,7 +18,7 @@ Rig has two layers:
                     ┌─────────────────────────┐
                     │      Process Shell       │
                     │                           │
-  cast/call ───►   │  Rig.Server (gen_statem)  │  ──────► executed effects
+  cast/call ───►   │  Crank.Server (gen_statem)  │  ──────► executed effects
                     │                           │  ──────► telemetry events
                     └─────────────────────────┘
 ```
@@ -34,7 +34,7 @@ Answer: telemetry handlers. The Server already emits everything you need.
 
 ## What telemetry gives you
 
-Every state transition emits `[:rig, :transition]` with this metadata:
+Every state transition emits `[:crank, :transition]` with this metadata:
 
 ```elixir
 %{
@@ -60,7 +60,7 @@ defmodule MyApp.OrderPersistence do
   def attach do
     :telemetry.attach(
       "order-persistence",
-      [:rig, :transition],
+      [:crank, :transition],
       &__MODULE__.handle/4,
       nil
     )
@@ -118,7 +118,7 @@ defmodule MyApp.OrderNotifications do
   def attach do
     :telemetry.attach(
       "order-notifications",
-      [:rig, :transition],
+      [:crank, :transition],
       &__MODULE__.handle/4,
       nil
     )
@@ -156,7 +156,7 @@ defmodule MyApp.AuditLog do
   def attach do
     :telemetry.attach(
       "order-audit",
-      [:rig, :transition],
+      [:crank, :transition],
       &__MODULE__.handle/4,
       nil
     )
@@ -199,7 +199,7 @@ defmodule MyApp.OrderBroadcast do
   def attach do
     :telemetry.attach(
       "order-pubsub",
-      [:rig, :transition],
+      [:crank, :transition],
       &__MODULE__.handle/4,
       nil
     )
@@ -251,8 +251,8 @@ defmodule MyApp.Application do
       {Task.Supervisor, name: MyApp.TaskSupervisor},
       {Oban, oban_config()},
       {Phoenix.PubSub, name: MyApp.PubSub},
-      # Start your Rig servers
-      {Rig.Server, {MyApp.Order, [order_id: "order-1"]}}
+      # Start your Crank servers
+      {Crank.Server, {MyApp.Order, [order_id: "order-1"]}}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one)
@@ -269,13 +269,13 @@ transition (the initial `:enter` event) fires immediately on process start.
 
 ```elixir
 # BAD -- breaks pure core
-def handle_event(:paid, _, :ship, data) do
+def handle_event(_, :ship, :paid, data) do
   MyApp.Mailer.send_shipped_email(data.email)  # side effect!
   {:next_state, :shipped, data}
 end
 ```
 
-This means `Rig.crank/2` sends an email. Your tests send emails. Your
+This means `Crank.crank/2` sends an email. Your tests send emails. Your
 LiveView reducer sends emails. The pure core is no longer pure.
 
 Put side effects in telemetry handlers. The state machine decides *what*
@@ -318,7 +318,7 @@ end
 
 ```elixir
 # BAD -- attaches a new handler on every transition
-def handle_event(:pending, _, :pay, data) do
+def handle_event(_, :pay, :pending, data) do
   :telemetry.attach("notify-#{data.order_id}", ...)
   {:next_state, :paid, data}
 end
@@ -331,14 +331,14 @@ and filter by module/state using pattern matching.
 
 The whole point of the pure core is that you test without any of this.
 Your telemetry handlers, persistence, and notifications are *not attached*
-during `Rig.crank/2` tests. The state machine logic is tested in isolation:
+during `Crank.crank/2` tests. The state machine logic is tested in isolation:
 
 ```elixir
 test "paying an order transitions to paid" do
   machine =
     MyApp.Order
-    |> Rig.new(order_id: 123)
-    |> Rig.crank(:pay)
+    |> Crank.new(order_id: 123)
+    |> Crank.crank(:pay)
 
   assert machine.state == :paid
 end
@@ -358,7 +358,7 @@ test "persistence handler saves order snapshot" do
     data: %{order_id: 123}
   }
 
-  MyApp.OrderPersistence.handle([:rig, :transition], %{}, meta, nil)
+  MyApp.OrderPersistence.handle([:crank, :transition], %{}, meta, nil)
 
   assert MyApp.Repo.get_by(MyApp.OrderSnapshot, order_id: 123)
 end

@@ -1,6 +1,6 @@
-defmodule Rig.StoppedError do
+defmodule Crank.StoppedError do
   @moduledoc """
-  Raised when `Rig.crank/2` or `Rig.crank!/2` is called on a machine
+  Raised when `Crank.crank/2` or `Crank.crank!/2` is called on a machine
   whose status is `{:stopped, reason}`.
   """
 

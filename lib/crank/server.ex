@@ -1,6 +1,6 @@
-defmodule Rig.Server do
+defmodule Crank.Server do
   @moduledoc """
-  A thin `:gen_statem` adapter that runs a `Rig` callback module as
+  A thin `:gen_statem` adapter that runs a `Crank` callback module as
   a supervised OTP process.
 
   The Server delegates all crank logic to the pure callback module,
@@ -11,24 +11,24 @@ defmodule Rig.Server do
   ## Usage
 
       defmodule MyApp.DoorServer do
-        use Rig.Server, logic: MyApp.Door
+        use Crank.Server, logic: MyApp.Door
       end
 
-      {:ok, pid} = Rig.Server.start_link(MyApp.DoorServer, [])
-      Rig.Server.cast(pid, :unlock)
+      {:ok, pid} = Crank.Server.start_link(MyApp.DoorServer, [])
+      Crank.Server.cast(pid, :unlock)
 
   Or inline (the logic module *is* the server module):
 
       defmodule MyApp.Door do
-        use Rig
-        use Rig.Server
+        use Crank
+        use Crank.Server
 
-        @impl Rig
+        @impl Crank
         def init(_opts), do: {:ok, :locked, %{}}
 
-        @impl Rig
-        def handle_event(:locked, _, :unlock, data), do: {:next_state, :unlocked, data}
-        def handle_event(:unlocked, _, :lock, data), do: {:next_state, :locked, data}
+        @impl Crank
+        def handle_event(_, :unlock, :locked, data), do: {:next_state, :unlocked, data}
+        def handle_event(_, :lock, :unlocked, data), do: {:next_state, :locked, data}
       end
 
   """
@@ -49,7 +49,7 @@ defmodule Rig.Server do
       def child_spec(args) do
         %{
           id: __MODULE__,
-          start: {Rig.Server, :start_link, [@logic_module, args, [name: __MODULE__]]},
+          start: {Crank.Server, :start_link, [@logic_module, args, [name: __MODULE__]]},
           restart: :permanent,
           shutdown: 5000
         }
@@ -64,9 +64,9 @@ defmodule Rig.Server do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Start a `Rig.Server` process linked to the caller.
+  Start a `Crank.Server` process linked to the caller.
 
-  `module` is the callback module implementing the `Rig` behaviour.
+  `module` is the callback module implementing the `Crank` behaviour.
   `args` are passed to `module.init/1`.
   `opts` supports `:name` for process registration, plus any
   `:gen_statem` start options (`:debug`, `:spawn_opt`, etc.).
@@ -76,9 +76,9 @@ defmodule Rig.Server do
     {name, gen_opts} = Keyword.pop(opts, :name)
 
     if name do
-      :gen_statem.start_link({:local, name}, Rig.Server.Adapter, {module, args}, gen_opts)
+      :gen_statem.start_link({:local, name}, Crank.Server.Adapter, {module, args}, gen_opts)
     else
-      :gen_statem.start_link(Rig.Server.Adapter, {module, args}, gen_opts)
+      :gen_statem.start_link(Crank.Server.Adapter, {module, args}, gen_opts)
     end
   end
 
@@ -99,7 +99,7 @@ defmodule Rig.Server do
   end
 end
 
-defmodule Rig.Server.Adapter do
+defmodule Crank.Server.Adapter do
   @moduledoc false
   @behaviour :gen_statem
 
@@ -153,7 +153,7 @@ defmodule Rig.Server.Adapter do
 
   # All other events — pass event_type through to the callback directly
   def handle_event(event_type, event_content, state, %__MODULE__{} = internal) do
-    internal.module.handle_event(state, event_type, event_content, internal.data)
+    internal.module.handle_event(event_type, event_content, state, internal.data)
     |> translate_result(internal, event_content)
   end
 
@@ -161,7 +161,7 @@ defmodule Rig.Server.Adapter do
   # Result translation — callback returns → gen_statem returns
   # ---------------------------------------------------------------------------
 
-  @spec translate_result(Rig.handle_event_result(), t(), term()) :: term()
+  @spec translate_result(Crank.handle_event_result(), t(), term()) :: term()
   defp translate_result({:next_state, new_state, new_data}, internal, event) do
     report(internal.module, nil, new_state, event, new_data)
     {:next_state, new_state, %{internal | data: new_data}}
@@ -195,7 +195,7 @@ defmodule Rig.Server.Adapter do
   @spec report(module(), term(), term(), term(), term()) :: :ok
   defp report(module, from, to, event, data) do
     :telemetry.execute(
-      [:rig, :transition],
+      [:crank, :transition],
       %{system_time: System.system_time()},
       %{module: module, from: from, to: to, event: event, data: data}
     )

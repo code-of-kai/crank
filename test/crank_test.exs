@@ -1,26 +1,26 @@
-defmodule Rig.PureTest do
+defmodule Crank.PureTest do
   use ExUnit.Case, async: true
-  doctest Rig
+  doctest Crank
 
   # ---------------------------------------------------------------------------
   # Fixtures — one machine per return type family
   # ---------------------------------------------------------------------------
 
   defmodule Door do
-    use Rig
+    use Crank
 
     @impl true
     def init(_opts), do: {:ok, :locked, %{}}
 
     @impl true
-    def handle_event(:locked, _, :unlock, data), do: {:next_state, :unlocked, data}
-    def handle_event(:unlocked, _, :lock, data), do: {:next_state, :locked, data}
-    def handle_event(:unlocked, _, :open, data), do: {:next_state, :opened, data}
-    def handle_event(:opened, _, :close, data), do: {:next_state, :unlocked, data}
+    def handle_event(_, :unlock, :locked, data), do: {:next_state, :unlocked, data}
+    def handle_event(_, :lock, :unlocked, data), do: {:next_state, :locked, data}
+    def handle_event(_, :open, :unlocked, data), do: {:next_state, :opened, data}
+    def handle_event(_, :close, :opened, data), do: {:next_state, :unlocked, data}
   end
 
   defmodule Order do
-    use Rig
+    use Crank
 
     @impl true
     def init(opts) do
@@ -28,39 +28,39 @@ defmodule Rig.PureTest do
     end
 
     @impl true
-    def handle_event(:pending, _, :pay, data) do
+    def handle_event(_, :pay, :pending, data) do
       {:next_state, :paid, Map.put(data, :paid_at, :now)}
     end
 
-    def handle_event(:paid, _, :ship, data) do
+    def handle_event(_, :ship, :paid, data) do
       {:next_state, :shipped, data, [{:state_timeout, 86_400_000, :delivery_timeout}]}
     end
 
-    def handle_event(:paid, _, :cancel, data) do
+    def handle_event(_, :cancel, :paid, data) do
       {:stop, :cancelled, Map.put(data, :cancelled_at, :now)}
     end
 
-    def handle_event(_state, _, :keep, data), do: {:keep_state, data}
+    def handle_event(_, :keep, _state, data), do: {:keep_state, data}
 
-    def handle_event(_state, _, :keep_with_actions, data) do
+    def handle_event(_, :keep_with_actions, _state, data) do
       {:keep_state, data, [{:state_timeout, 1000, :nudge}]}
     end
 
-    def handle_event(_state, _, :noop, _data), do: :keep_state_and_data
+    def handle_event(_, :noop, _state, _data), do: :keep_state_and_data
 
-    def handle_event(_state, _, :noop_with_actions, _data) do
+    def handle_event(_, :noop_with_actions, _state, _data) do
       {:keep_state_and_data, [{:state_timeout, 2000, :nag}]}
     end
   end
 
   defmodule WithEnter do
-    use Rig
+    use Crank
 
     @impl true
     def init(_opts), do: {:ok, :a, %{}}
 
     @impl true
-    def handle_event(:a, _, :go, data), do: {:next_state, :b, data}
+    def handle_event(_, :go, :a, data), do: {:next_state, :b, data}
 
     @impl true
     def on_enter(old, new, data) do
@@ -69,13 +69,13 @@ defmodule Rig.PureTest do
   end
 
   defmodule WithEnterActions do
-    use Rig
+    use Crank
 
     @impl true
     def init(_opts), do: {:ok, :a, %{}}
 
     @impl true
-    def handle_event(:a, _, :go, data) do
+    def handle_event(_, :go, :a, data) do
       {:next_state, :b, data, [{:state_timeout, 5000, :from_handle}]}
     end
 
@@ -93,39 +93,39 @@ defmodule Rig.PureTest do
 
   describe "return types" do
     test "{:next_state, state, data}" do
-      m = Rig.new(Door) |> Rig.crank(:unlock)
+      m = Crank.new(Door) |> Crank.crank(:unlock)
       assert m.state == :unlocked
       assert m.effects == []
     end
 
     test "{:next_state, state, data, actions}" do
-      m = Rig.new(Order, order_id: 1, amount: 50) |> Rig.crank(:pay) |> Rig.crank(:ship)
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:pay) |> Crank.crank(:ship)
       assert m.state == :shipped
       assert m.effects == [{:state_timeout, 86_400_000, :delivery_timeout}]
     end
 
     test "{:keep_state, data}" do
-      m = Rig.new(Order, order_id: 1, amount: 50) |> Rig.crank(:keep)
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:keep)
       assert m.state == :pending
     end
 
     test "{:keep_state, data, actions}" do
-      m = Rig.new(Order, order_id: 1, amount: 50) |> Rig.crank(:keep_with_actions)
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:keep_with_actions)
       assert m.effects == [{:state_timeout, 1000, :nudge}]
     end
 
     test ":keep_state_and_data" do
-      m = Rig.new(Order, order_id: 1, amount: 50) |> Rig.crank(:noop)
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:noop)
       assert m.state == :pending
     end
 
     test "{:keep_state_and_data, actions}" do
-      m = Rig.new(Order, order_id: 1, amount: 50) |> Rig.crank(:noop_with_actions)
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:noop_with_actions)
       assert m.effects == [{:state_timeout, 2000, :nag}]
     end
 
     test "{:stop, reason, data}" do
-      m = Rig.new(Order, order_id: 1, amount: 50) |> Rig.crank(:pay) |> Rig.crank(:cancel)
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:pay) |> Crank.crank(:cancel)
       assert m.status == {:stopped, :cancelled}
     end
   end
@@ -136,12 +136,12 @@ defmodule Rig.PureTest do
 
   describe "on_enter/3" do
     test "receives old_state and new_state" do
-      m = Rig.new(WithEnter) |> Rig.crank(:go)
+      m = Crank.new(WithEnter) |> Crank.crank(:go)
       assert m.data.entered == {:a, :b}
     end
 
     test "effects from handle_event and on_enter combine in order" do
-      m = Rig.new(WithEnterActions) |> Rig.crank(:go)
+      m = Crank.new(WithEnterActions) |> Crank.crank(:go)
       assert m.effects == [{:state_timeout, 5000, :from_handle}, {:state_timeout, 3000, :from_enter}]
     end
   end
@@ -153,54 +153,54 @@ defmodule Rig.PureTest do
   describe "error paths" do
     test "init {:stop, reason} raises ArgumentError" do
       defmodule FailInit do
-        use Rig
+        use Crank
         @impl true
         def init(_), do: {:stop, :bad_config}
         @impl true
-        def handle_event(_, _, _, _), do: :keep_state_and_data
+        def handle_event(_, _, _, _data), do: :keep_state_and_data
       end
 
-      assert_raise ArgumentError, ~r/bad_config/, fn -> Rig.new(FailInit) end
+      assert_raise ArgumentError, ~r/bad_config/, fn -> Crank.new(FailInit) end
     end
 
-    test "non-Rig module raises ArgumentError" do
-      assert_raise ArgumentError, ~r/does not implement the Rig behaviour/, fn ->
-        Rig.new(String)
+    test "non-Crank module raises ArgumentError" do
+      assert_raise ArgumentError, ~r/does not implement the Crank behaviour/, fn ->
+        Crank.new(String)
       end
     end
 
     test "invalid callback return raises ArgumentError" do
       defmodule BadReturn do
-        use Rig
+        use Crank
         @impl true
         def init(_), do: {:ok, :idle, %{}}
         @impl true
-        def handle_event(:idle, _, :go, _data), do: :oops
+        def handle_event(_, :go, :idle, _data), do: :oops
       end
 
       assert_raise ArgumentError, ~r/returned invalid result.*:oops/, fn ->
-        Rig.new(BadReturn) |> Rig.crank(:go)
+        Crank.new(BadReturn) |> Crank.crank(:go)
       end
     end
 
     test "unhandled event crashes with FunctionClauseError" do
       assert_raise FunctionClauseError, fn ->
-        Rig.new(Door) |> Rig.crank(:nonexistent)
+        Crank.new(Door) |> Crank.crank(:nonexistent)
       end
     end
 
     test "crank on stopped machine raises StoppedError" do
-      m = Rig.new(Order, order_id: 1, amount: 50) |> Rig.crank(:pay) |> Rig.crank(:cancel)
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:pay) |> Crank.crank(:cancel)
 
-      assert_raise Rig.StoppedError, ~r/machine is stopped/, fn ->
-        Rig.crank(m, :ship)
+      assert_raise Crank.StoppedError, ~r/machine is stopped/, fn ->
+        Crank.crank(m, :ship)
       end
     end
 
     test "crank! raises on stop result" do
-      m = Rig.new(Order, order_id: 1, amount: 50) |> Rig.crank!(:pay)
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank!(:pay)
 
-      assert_raise Rig.StoppedError, fn -> Rig.crank!(m, :cancel) end
+      assert_raise Crank.StoppedError, fn -> Crank.crank!(m, :cancel) end
     end
   end
 end

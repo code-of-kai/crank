@@ -1,4 +1,4 @@
-defmodule Rig.ServerTest do
+defmodule Crank.ServerTest do
   use ExUnit.Case, async: true
 
   # ---------------------------------------------------------------------------
@@ -6,41 +6,41 @@ defmodule Rig.ServerTest do
   # ---------------------------------------------------------------------------
 
   defmodule Door do
-    use Rig
+    use Crank
 
     @impl true
     def init(opts), do: {:ok, :locked, %{key: opts[:key] || "default"}}
 
     @impl true
-    def handle_event(:locked, _, :unlock, data), do: {:next_state, :unlocked, data}
-    def handle_event(:unlocked, _, :lock, data), do: {:next_state, :locked, data}
-    def handle_event(:unlocked, _, :open, data), do: {:next_state, :opened, data}
-    def handle_event(:opened, _, :close, data), do: {:next_state, :unlocked, data}
+    def handle_event(_, :unlock, :locked, data), do: {:next_state, :unlocked, data}
+    def handle_event(_, :lock, :unlocked, data), do: {:next_state, :locked, data}
+    def handle_event(_, :open, :unlocked, data), do: {:next_state, :opened, data}
+    def handle_event(_, :close, :opened, data), do: {:next_state, :unlocked, data}
 
-    def handle_event(state, {:call, from}, :status, data) do
+    def handle_event({:call, from}, :status, state, data) do
       {:keep_state, data, [{:reply, from, state}]}
     end
 
-    def handle_event(:opened, _, :auto_close, data) do
+    def handle_event(_, :auto_close, :opened, data) do
       {:keep_state, data, [{:state_timeout, 50, :close_timeout}]}
     end
 
-    def handle_event(:opened, :state_timeout, :close_timeout, data) do
+    def handle_event(:state_timeout, :close_timeout, :opened, data) do
       {:next_state, :unlocked, data}
     end
   end
 
   defmodule DoorWithEnter do
-    use Rig
+    use Crank
 
     @impl true
     def init(_opts), do: {:ok, :locked, %{enter_log: []}}
 
     @impl true
-    def handle_event(:locked, _, :unlock, data), do: {:next_state, :unlocked, data}
-    def handle_event(:unlocked, _, :lock, data), do: {:next_state, :locked, data}
+    def handle_event(_, :unlock, :locked, data), do: {:next_state, :unlocked, data}
+    def handle_event(_, :lock, :unlocked, data), do: {:next_state, :locked, data}
 
-    def handle_event(_state, {:call, from}, :enter_log, data) do
+    def handle_event({:call, from}, :enter_log, _state, data) do
       {:keep_state, data, [{:reply, from, data.enter_log}]}
     end
 
@@ -56,19 +56,19 @@ defmodule Rig.ServerTest do
 
   describe "start_link/3" do
     test "starts a gen_statem process" do
-      {:ok, pid} = Rig.Server.start_link(Door, [])
+      {:ok, pid} = Crank.Server.start_link(Door, [])
       assert Process.alive?(pid)
       GenServer.stop(pid)
     end
 
     test "passes args to init" do
-      {:ok, pid} = Rig.Server.start_link(Door, key: "secret")
-      assert Rig.Server.call(pid, :status) == :locked
+      {:ok, pid} = Crank.Server.start_link(Door, key: "secret")
+      assert Crank.Server.call(pid, :status) == :locked
       GenServer.stop(pid)
     end
 
     test "supports :name option" do
-      {:ok, pid} = Rig.Server.start_link(Door, [], name: :test_door)
+      {:ok, pid} = Crank.Server.start_link(Door, [], name: :test_door)
       assert Process.whereis(:test_door) == pid
       GenServer.stop(pid)
     end
@@ -80,20 +80,20 @@ defmodule Rig.ServerTest do
 
   describe "cast/2" do
     test "sends an async event that transitions state" do
-      {:ok, pid} = Rig.Server.start_link(Door, [])
-      :ok = Rig.Server.cast(pid, :unlock)
-      assert eventually(fn -> Rig.Server.call(pid, :status) == :unlocked end)
+      {:ok, pid} = Crank.Server.start_link(Door, [])
+      :ok = Crank.Server.cast(pid, :unlock)
+      assert eventually(fn -> Crank.Server.call(pid, :status) == :unlocked end)
       GenServer.stop(pid)
     end
   end
 
   describe "call/3" do
     test "sends a sync event and returns the reply" do
-      {:ok, pid} = Rig.Server.start_link(Door, [])
-      assert Rig.Server.call(pid, :status) == :locked
+      {:ok, pid} = Crank.Server.start_link(Door, [])
+      assert Crank.Server.call(pid, :status) == :locked
 
-      Rig.Server.cast(pid, :unlock)
-      assert eventually(fn -> Rig.Server.call(pid, :status) == :unlocked end)
+      Crank.Server.cast(pid, :unlock)
+      assert eventually(fn -> Crank.Server.call(pid, :status) == :unlocked end)
 
       GenServer.stop(pid)
     end
@@ -106,24 +106,24 @@ defmodule Rig.ServerTest do
   describe "event_type passthrough" do
     test "cast events arrive with :cast event_type" do
       defmodule CastProbe do
-        use Rig
+        use Crank
 
         @impl true
         def init(_), do: {:ok, :idle, %{}}
 
         @impl true
-        def handle_event(:idle, :cast, :ping, data) do
+        def handle_event(:cast, :ping, :idle, data) do
           {:keep_state, Map.put(data, :got_cast, true)}
         end
 
-        def handle_event(_state, {:call, from}, :check, data) do
+        def handle_event({:call, from}, :check, _state, data) do
           {:keep_state, data, [{:reply, from, data[:got_cast]}]}
         end
       end
 
-      {:ok, pid} = Rig.Server.start_link(CastProbe, [])
-      Rig.Server.cast(pid, :ping)
-      assert eventually(fn -> Rig.Server.call(pid, :check) == true end)
+      {:ok, pid} = Crank.Server.start_link(CastProbe, [])
+      Crank.Server.cast(pid, :ping)
+      assert eventually(fn -> Crank.Server.call(pid, :check) == true end)
       GenServer.stop(pid)
     end
   end
@@ -134,13 +134,13 @@ defmodule Rig.ServerTest do
 
   describe "state timeouts" do
     test "state_timeout fires and triggers transition" do
-      {:ok, pid} = Rig.Server.start_link(Door, [])
+      {:ok, pid} = Crank.Server.start_link(Door, [])
 
-      Rig.Server.cast(pid, :unlock)
-      Rig.Server.cast(pid, :open)
-      Rig.Server.cast(pid, :auto_close)
+      Crank.Server.cast(pid, :unlock)
+      Crank.Server.cast(pid, :open)
+      Crank.Server.cast(pid, :auto_close)
 
-      assert eventually(fn -> Rig.Server.call(pid, :status) == :unlocked end, 200)
+      assert eventually(fn -> Crank.Server.call(pid, :status) == :unlocked end, 200)
 
       GenServer.stop(pid)
     end
@@ -152,12 +152,12 @@ defmodule Rig.ServerTest do
 
   describe "on_enter/3 via Server" do
     test "on_enter is called on state transitions" do
-      {:ok, pid} = Rig.Server.start_link(DoorWithEnter, [])
+      {:ok, pid} = Crank.Server.start_link(DoorWithEnter, [])
 
-      Rig.Server.cast(pid, :unlock)
+      Crank.Server.cast(pid, :unlock)
       Process.sleep(20)
 
-      log = Rig.Server.call(pid, :enter_log)
+      log = Crank.Server.call(pid, :enter_log)
       assert {:locked, :unlocked} in log
 
       GenServer.stop(pid)
@@ -169,7 +169,7 @@ defmodule Rig.ServerTest do
   # ---------------------------------------------------------------------------
 
   describe "telemetry" do
-    test "emits [:rig, :transition] on state changes" do
+    test "emits [:crank, :transition] on state changes" do
       ref = make_ref()
       parent = self()
 
@@ -177,16 +177,16 @@ defmodule Rig.ServerTest do
         send(parent, {ref, event, measurements, metadata})
       end
 
-      :telemetry.attach("test-rig-transition", [:rig, :transition], handler, nil)
+      :telemetry.attach("test-crank-transition", [:crank, :transition], handler, nil)
 
-      {:ok, pid} = Rig.Server.start_link(Door, [])
-      Rig.Server.cast(pid, :unlock)
+      {:ok, pid} = Crank.Server.start_link(Door, [])
+      Crank.Server.cast(pid, :unlock)
       Process.sleep(50)
 
-      assert_received {^ref, [:rig, :transition], %{system_time: _},
+      assert_received {^ref, [:crank, :transition], %{system_time: _},
                        %{module: Door, data: _data}}
 
-      :telemetry.detach("test-rig-transition")
+      :telemetry.detach("test-crank-transition")
       GenServer.stop(pid)
     end
 
@@ -198,17 +198,17 @@ defmodule Rig.ServerTest do
         send(parent, {ref, metadata})
       end
 
-      :telemetry.attach("test-rig-data", [:rig, :transition], handler, nil)
+      :telemetry.attach("test-crank-data", [:crank, :transition], handler, nil)
 
-      {:ok, pid} = Rig.Server.start_link(Door, key: "secret")
-      Rig.Server.cast(pid, :unlock)
+      {:ok, pid} = Crank.Server.start_link(Door, key: "secret")
+      Crank.Server.cast(pid, :unlock)
       Process.sleep(50)
 
       # Flush until we get a transition with to: :unlocked
       assert_received {^ref, %{to: :unlocked, data: data}}
       assert data.key == "secret"
 
-      :telemetry.detach("test-rig-data")
+      :telemetry.detach("test-crank-data")
       GenServer.stop(pid)
     end
   end

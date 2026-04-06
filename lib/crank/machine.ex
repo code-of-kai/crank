@@ -1,17 +1,18 @@
-defmodule Rig.Machine do
+defmodule Crank.Machine do
   @moduledoc """
   The core data structure representing a finite state machine.
 
-  A `%Rig.Machine{}` is a pure value — it holds the current state,
+  A `%Crank.Machine{}` is a pure value — it holds the current state,
   accumulated data, and any effects produced by the last crank.
-  It never executes side effects. The optional `Rig.Server` process
+  It never executes side effects. The optional `Crank.Server` process
   adapter interprets and executes effects; in pure code, you
   inspect them directly.
 
   ## Fields
 
-    * `:module` — the callback module implementing the `Rig` behaviour
-    * `:state` — the current state (any term, typically an atom)
+    * `:module` — the callback module implementing the `Crank` behaviour
+    * `:state` — the current state (any term — atoms, structs, tagged tuples;
+      see `Crank.Examples.Submission` for the struct-per-state pattern)
     * `:data` — arbitrary user data carried through cranks
     * `:effects` — effects returned by the most recent crank,
       stored as data for the caller or Server to interpret
@@ -19,10 +20,10 @@ defmodule Rig.Machine do
 
   ## Parameterized types
 
-  `t/0` is the generic type used inside Rig's own code. For precise
+  `t/0` is the generic type used inside Crank's own code. For precise
   typing in your own modules, use `t/2`:
 
-      @spec get_machine() :: Rig.Machine.t(:locked | :unlocked, map())
+      @spec get_machine() :: Crank.Machine.t(:locked | :unlocked, map())
 
   """
 
@@ -58,7 +59,7 @@ defmodule Rig.Machine do
           | {{:timeout, term()}, non_neg_integer() | :infinity, term(), keyword()}
 
   @typedoc "Inject a synthetic event into the machine's own mailbox."
-  @type next_event_action :: {:next_event, Rig.event_type(), term()}
+  @type next_event_action :: {:next_event, Crank.event_type(), term()}
 
   @typedoc """
   Any gen_statem action that can appear in an effects list.
@@ -88,7 +89,7 @@ defmodule Rig.Machine do
 
   Use this in your own code for precise typing:
 
-      @spec checkout_machine() :: Rig.Machine.t(:cart | :payment | :complete, Order.t())
+      @spec checkout_machine() :: Crank.Machine.t(:cart | :payment | :complete, Order.t())
   """
   @type t(state, data) :: %__MODULE__{
           module: module(),

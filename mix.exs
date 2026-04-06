@@ -1,18 +1,18 @@
-defmodule Rig.MixProject do
+defmodule Crank.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/code-of-kai/rig"
+  @source_url "https://github.com/code-of-kai/crank"
 
   def project do
     [
-      app: :rig,
+      app: :crank,
       version: @version,
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      name: "Rig",
+      name: "Crank",
       description: "Pure state machines for Elixir — testable data structures first, optional gen_statem process adapter",
       source_url: @source_url,
       package: package(),
@@ -39,7 +39,7 @@ defmodule Rig.MixProject do
 
   defp package do
     [
-      name: "rig_fsm",
+      name: "crank",
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
@@ -51,7 +51,7 @@ defmodule Rig.MixProject do
 
   defp docs do
     [
-      main: "Rig",
+      main: "Crank",
       source_ref: "v#{@version}",
       extras: ["guides/hexagonal-architecture.md", "CHANGELOG.md", "DESIGN.md"],
       groups_for_extras: [
