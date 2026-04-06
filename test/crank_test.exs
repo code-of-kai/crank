@@ -88,6 +88,160 @@ defmodule Crank.PureTest do
   end
 
   # ---------------------------------------------------------------------------
+  # handle/3 — simplified callback (vending machine)
+  # ---------------------------------------------------------------------------
+
+  defmodule VendingMachine do
+    use Crank
+
+    @impl true
+    def init(_opts), do: {:ok, :idle, %{balance: 0}}
+
+    @impl true
+    def handle(:insert, :idle, data) do
+      {:next_state, :ready, %{data | balance: data.balance + 100}}
+    end
+
+    def handle(:select, :ready, data) do
+      {:next_state, :vending, data, [{:state_timeout, 5000, :vend_timeout}]}
+    end
+
+    def handle(:dispense, :vending, data) do
+      {:next_state, :idle, %{data | balance: 0}}
+    end
+
+    def handle(:refund, :ready, data) do
+      {:stop, :refunded, %{data | balance: 0}}
+    end
+
+    def handle(:check, _state, data), do: {:keep_state, data}
+    def handle(:noop, _state, _data), do: :keep_state_and_data
+
+    def handle(:check_with_actions, _state, data) do
+      {:keep_state, data, [{:state_timeout, 1000, :nudge}]}
+    end
+
+    def handle(:noop_with_actions, _state, _data) do
+      {:keep_state_and_data, [{:state_timeout, 2000, :nag}]}
+    end
+  end
+
+  defmodule VendingWithEnter do
+    use Crank
+
+    @impl true
+    def init(_opts), do: {:ok, :idle, %{entered: nil}}
+
+    @impl true
+    def handle(:insert, :idle, data), do: {:next_state, :ready, data}
+
+    @impl true
+    def on_enter(old, new, data) do
+      {:keep_state, %{data | entered: {old, new}}}
+    end
+  end
+
+  describe "handle/3" do
+    test "basic transitions" do
+      m =
+        VendingMachine
+        |> Crank.new()
+        |> Crank.crank(:insert)
+        |> Crank.crank(:select)
+
+      assert m.state == :vending
+      assert m.data.balance == 100
+    end
+
+    test "{:next_state, state, data}" do
+      m = Crank.new(VendingMachine) |> Crank.crank(:insert)
+      assert m.state == :ready
+      assert m.effects == []
+    end
+
+    test "{:next_state, state, data, actions}" do
+      m = Crank.new(VendingMachine) |> Crank.crank(:insert) |> Crank.crank(:select)
+      assert m.state == :vending
+      assert m.effects == [{:state_timeout, 5000, :vend_timeout}]
+    end
+
+    test "{:keep_state, data}" do
+      m = Crank.new(VendingMachine) |> Crank.crank(:check)
+      assert m.state == :idle
+    end
+
+    test "{:keep_state, data, actions}" do
+      m = Crank.new(VendingMachine) |> Crank.crank(:check_with_actions)
+      assert m.effects == [{:state_timeout, 1000, :nudge}]
+    end
+
+    test ":keep_state_and_data" do
+      m = Crank.new(VendingMachine) |> Crank.crank(:noop)
+      assert m.state == :idle
+    end
+
+    test "{:keep_state_and_data, actions}" do
+      m = Crank.new(VendingMachine) |> Crank.crank(:noop_with_actions)
+      assert m.effects == [{:state_timeout, 2000, :nag}]
+    end
+
+    test "{:stop, reason, data}" do
+      m = Crank.new(VendingMachine) |> Crank.crank(:insert) |> Crank.crank(:refund)
+      assert m.status == {:stopped, :refunded}
+      assert m.data.balance == 0
+    end
+
+    test "composes with on_enter/3" do
+      m = Crank.new(VendingWithEnter) |> Crank.crank(:insert)
+      assert m.data.entered == {:idle, :ready}
+    end
+
+    test "handle_event/4 takes precedence when both exist" do
+      defmodule BothCallbacks do
+        use Crank
+
+        @impl true
+        def init(_), do: {:ok, :a, %{}}
+
+        @impl true
+        def handle_event(_, :go, :a, data), do: {:next_state, :b_from_event, data}
+
+        @impl true
+        def handle(:go, :a, data), do: {:next_state, :b_from_handle, data}
+      end
+
+      m = Crank.new(BothCallbacks) |> Crank.crank(:go)
+      assert m.state == :b_from_event
+    end
+
+    test "module with neither callback raises" do
+      defmodule NoCallbacks do
+        def init(_), do: {:ok, :a, %{}}
+      end
+
+      assert_raise ArgumentError, ~r/handle_event\/4 or handle\/3/, fn ->
+        Crank.new(NoCallbacks)
+      end
+    end
+
+    test "invalid return references handle/3 in error" do
+      defmodule BadHandleReturn do
+        use Crank
+
+        @impl true
+        def init(_), do: {:ok, :idle, %{}}
+
+        @impl true
+        def handle(:go, :idle, _data), do: :oops
+      end
+
+      assert_raise ArgumentError, ~r/handle\/3.*returned invalid result/, fn ->
+        Crank.new(BadHandleReturn) |> Crank.crank(:go)
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Return types — one test per variant (exhaustive)
   # ---------------------------------------------------------------------------
 

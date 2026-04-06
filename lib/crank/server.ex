@@ -119,7 +119,8 @@ defmodule Crank.Server.Adapter do
   def init({module, args}) do
     Code.ensure_loaded(module)
 
-    unless function_exported?(module, :handle_event, 4) do
+    unless function_exported?(module, :handle_event, 4) or
+             function_exported?(module, :handle, 3) do
       {:stop, {:bad_module, module}}
     else
       case module.init(args) do
@@ -153,8 +154,16 @@ defmodule Crank.Server.Adapter do
 
   # All other events — pass event_type through to the callback directly
   def handle_event(event_type, event_content, state, %__MODULE__{} = internal) do
-    internal.module.handle_event(event_type, event_content, state, internal.data)
+    dispatch_event(internal.module, event_type, event_content, state, internal.data)
     |> translate_result(internal, event_content)
+  end
+
+  defp dispatch_event(module, event_type, event_content, state, data) do
+    if function_exported?(module, :handle_event, 4) do
+      module.handle_event(event_type, event_content, state, data)
+    else
+      module.handle(event_content, state, data)
+    end
   end
 
   # ---------------------------------------------------------------------------

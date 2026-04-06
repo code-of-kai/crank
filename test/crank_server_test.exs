@@ -214,6 +214,66 @@ defmodule Crank.ServerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Tests — handle/3 via Server (vending machine)
+  # ---------------------------------------------------------------------------
+
+  defmodule VendingMachine do
+    use Crank
+
+    @impl true
+    def init(_opts), do: {:ok, :idle, %{balance: 0}}
+
+    @impl true
+    def handle(:insert, :idle, data) do
+      {:next_state, :ready, %{data | balance: data.balance + 100}}
+    end
+
+    def handle(:select, :ready, data) do
+      {:next_state, :vending, data}
+    end
+
+    def handle(:dispense, :vending, data) do
+      {:next_state, :idle, %{data | balance: 0}}
+    end
+  end
+
+  describe "handle/3 via Server" do
+    test "starts and transitions with handle/3 module" do
+      {:ok, pid} = Crank.Server.start_link(VendingMachine, [])
+      assert Process.alive?(pid)
+
+      Crank.Server.cast(pid, :insert)
+      Crank.Server.cast(pid, :select)
+
+      assert eventually(fn ->
+        :sys.get_state(pid) |> elem(0) == :vending
+      end)
+
+      GenServer.stop(pid)
+    end
+
+    test "emits telemetry with handle/3 module" do
+      ref = make_ref()
+      parent = self()
+
+      handler = fn _event, _measurements, metadata, _config ->
+        send(parent, {ref, metadata})
+      end
+
+      :telemetry.attach("test-handle3-telemetry", [:crank, :transition], handler, nil)
+
+      {:ok, pid} = Crank.Server.start_link(VendingMachine, [])
+      Crank.Server.cast(pid, :insert)
+      Process.sleep(50)
+
+      assert_received {^ref, %{to: :ready, module: VendingMachine}}
+
+      :telemetry.detach("test-handle3-telemetry")
+      GenServer.stop(pid)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 

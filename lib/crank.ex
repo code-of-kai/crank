@@ -189,6 +189,33 @@ defmodule Crank do
             ) :: handle_event_result()
 
   @doc """
+  Handle an event in the current state (simplified signature).
+
+  Drops `event_type` — the first argument of `handle_event/4` — which is
+  `:internal` in pure usage and ignored in most process clauses. Implement
+  this when you don't need to distinguish event types:
+
+      def handle(:validate, %Validating{violations: []}, data) do
+        {:next_state, %Quoted{}, data}
+      end
+
+  If a module exports `handle_event/4`, it takes precedence. For mixed
+  usage (e.g., `handle/3` for logic plus `handle_event/4` for replies),
+  add a catch-all delegation:
+
+      def handle_event({:call, from}, :status, state, data) do
+        {:keep_state, data, [{:reply, from, state}]}
+      end
+
+      def handle_event(_, event, state, data), do: handle(event, state, data)
+  """
+  @callback handle(
+              event :: term(),
+              state :: term(),
+              data :: term()
+            ) :: handle_event_result()
+
+  @doc """
   Called after entering a new state. Optional.
 
   Receives the previous state, the new state, and the current data.
@@ -201,7 +228,7 @@ defmodule Crank do
               data :: term()
             ) :: on_enter_result()
 
-  @optional_callbacks [on_enter: 3]
+  @optional_callbacks [handle: 3, handle_event: 4, on_enter: 3]
 
   # ---------------------------------------------------------------------------
   # __using__ macro
@@ -309,7 +336,7 @@ defmodule Crank do
   end
 
   def crank(%Machine{} = machine, event) do
-    result = machine.module.handle_event(:internal, event, machine.state, machine.data)
+    result = dispatch_event(machine.module, event, machine.state, machine.data)
     apply_result(machine, result)
   end
 
@@ -336,6 +363,18 @@ defmodule Crank do
 
       machine ->
         machine
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Dispatch — prefer handle_event/4, fall back to handle/3
+  # ---------------------------------------------------------------------------
+
+  defp dispatch_event(module, event, state, data) do
+    if function_exported?(module, :handle_event, 4) do
+      module.handle_event(:internal, event, state, data)
+    else
+      module.handle(event, state, data)
     end
   end
 
@@ -377,8 +416,13 @@ defmodule Crank do
   end
 
   defp apply_result(%Machine{module: module, state: state}, invalid) do
+    callback =
+      if function_exported?(module, :handle_event, 4),
+        do: "handle_event/4",
+        else: "handle/3"
+
     raise ArgumentError,
-          "#{inspect(module)}.handle_event/4 in state #{inspect(state)} " <>
+          "#{inspect(module)}.#{callback} in state #{inspect(state)} " <>
             "returned invalid result: #{inspect(invalid)}"
   end
 
@@ -416,10 +460,11 @@ defmodule Crank do
   defp validate_module!(module) do
     Code.ensure_loaded(module)
 
-    unless function_exported?(module, :handle_event, 4) do
+    unless function_exported?(module, :handle_event, 4) or
+             function_exported?(module, :handle, 3) do
       raise ArgumentError,
             "#{inspect(module)} does not implement the Crank behaviour " <>
-              "(missing handle_event/4)"
+              "(missing handle_event/4 or handle/3)"
     end
 
     :ok
