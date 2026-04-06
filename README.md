@@ -80,9 +80,11 @@ Pure function (Crank.crank/2) → GenServer → gen_statem (Crank.Server)
 
 Valim says start simple. Crank's starting point is simpler than what he recommends. And the promotion path is built in: start with `Crank.crank/2` (pure, no process), promote to `Crank.Server` (supervised `gen_statem`) when you need timeouts, supervision, or replies. The promotion is a deployment decision, not a rewrite. Same callback module, same logic, different caller.
 
-Most Elixir developers use GenServer with a `%{status: :accepting}` field and pattern match on it in their `handle_call` and `handle_cast` clauses. That IS a state machine -- it's just not a formal one. And for infrastructure plumbing -- caches, connection pools, request handlers -- it's sufficient. Those things don't model business states and transitions.
+Most Elixir developers use GenServer with a `%{status: :accepting}` field and pattern match on it in their `handle_call` and `handle_cast` clauses. That IS a state machine -- it's just not a formal one.
 
-But business logic IS states and transitions. A customer is in a state: prospect, active, churning, dormant. A submission is in a state: received, validating, eligible, declined. A policy is in a state: quoted, bound, active, lapsed, renewed. Business rules ARE transition rules: "you can't bind without quoting first," "when the underwriter approves, move from review to eligible."
+The Elixir ecosystem has spent a decade building out its infrastructure layer: Ecto for persistence, Phoenix for web, Oban for background jobs, Broadway for data pipelines, Bandit for HTTP. Caches, connection pools, pubsub brokers, HTTP clients -- all built, all mature, all excellent. That infrastructure exists to support one thing: your business logic. As the infrastructure layer matures and gets solved, what remains is the business logic. And business logic IS states and transitions.
+
+A customer is in a state: prospect, active, churning, dormant. A submission is in a state: received, validating, eligible, declined. A policy is in a state: quoted, bound, active, lapsed, renewed. Business rules ARE transition rules: "you can't bind without quoting first," "when the underwriter approves, move from review to eligible."
 
 Every business rule is: given this state and this event, what happens next? That's the definition of a finite state machine. The question was never whether your business logic is a state machine. It always is. The question is whether you make it explicit or implicit.
 
@@ -350,7 +352,7 @@ When the compiler can check this (expected mid-2026+), unhandled state variants 
 - **No magic.** Crank passes `:gen_statem` types and return values through unchanged. If you know `:gen_statem`, you know Crank.
 - **No hidden state.** No `states/0` callback, no registered names, no catch-all defaults. Function clauses declare the machine.
 - **Let it crash.** Unhandled events are bugs. Crank surfaces them immediately.
-- **~400 lines.** Small enough to read in one sitting. No framework, just a library.
+- **Auditable.** Small enough to read in one sitting. No framework, just a library.
 
 See [DESIGN.md](DESIGN.md) for the full specification and rationale behind every decision.
 
