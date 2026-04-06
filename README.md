@@ -64,7 +64,7 @@ Crank exists for the cases where that's not enough:
 
 ## How it works
 
-You write one callback module and use it in two contexts:
+You write one callback module. That module is always both pure and process-ready -- there's nothing to switch on or off. `Crank.crank/2` calls your `handle_event/4` directly as a pure function. `Crank.Server` calls the exact same `handle_event/4` through `:gen_statem`. Same function, two callers.
 
 | | Pure | Process |
 |---|---|---|
@@ -74,7 +74,7 @@ You write one callback module and use it in two contexts:
 | **Telemetry** | None | `[:crank, :transition]` on every state change |
 | **Good for** | Tests, LiveView reducers, Oban workers, scripts | Production supervision, timeouts, replies |
 
-Same module. Same callbacks. Zero process overhead when you don't need it.
+This means your development workflow is: write the logic, test it purely with property tests (thousands or millions of random event sequences), and deploy it as a supervised process. When you need to change a state or add a transition, you change the callback module and run the property tests again. If they pass, the process version works too -- because it's the same code. The only difference between pure and process is who calls your function and what happens to the effects afterward.
 
 ## Quick start
 

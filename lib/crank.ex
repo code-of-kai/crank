@@ -26,21 +26,27 @@ defmodule Crank do
   ## What Crank recovers
 
   Crank separates the two concerns that OTP fused together in `gen_fsm`:
-  state machine logic and process lifecycle. You implement a single callback
-  module with `handle_event/4` (and optionally `on_enter/3`), then use it
-  in two ways:
+  state machine logic and process lifecycle. You write one callback module
+  with `handle_event/4` (and optionally `on_enter/3`). That module is always
+  both pure and process-ready — there's nothing to switch:
 
-    1. **Pure** — `Crank.new/2` and `Crank.crank/2` operate on a `%Crank.Machine{}`
-       struct with no processes, no side effects, no telemetry. Perfect for
-       tests, LiveView reducers, Oban workers, scripts.
+    1. **Pure** — `Crank.new/2` and `Crank.crank/2` call your `handle_event/4`
+       directly as a pure function. Returns a `%Crank.Machine{}` struct. No
+       process, no side effects, no telemetry.
 
-    2. **Process** — `Crank.Server` wraps the same module in a `:gen_statem`
-       process, executing effects, emitting telemetry, and integrating with
-       supervision trees.
+    2. **Process** — `Crank.Server` calls the exact same `handle_event/4`
+       through `:gen_statem`. Executes effects, emits telemetry, integrates
+       with supervision trees.
 
-  For data scoping, Crank supports struct-per-state — each state is its own struct
-  with exactly the fields that exist in that state. See `Crank.Examples.Submission`
-  for the full pattern.
+  Same function, two callers. Write the logic, test it purely with property
+  tests (thousands of random event sequences), deploy it as a supervised
+  process. When you change a transition or add a state, run the property
+  tests again — if they pass, the process version works too, because it's
+  the same code.
+
+  For data scoping, Crank supports struct-per-state — each state is its own
+  struct with exactly the fields that exist in that state. See
+  `Crank.Examples.Submission` for the full pattern.
 
   ## Callback Signature
 
