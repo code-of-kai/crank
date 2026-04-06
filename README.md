@@ -6,7 +6,18 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Pure state machines for Elixir. Testable data structures first, optional `gen_statem` process adapter.
+Write your state machine logic once. Test it with pure functions -- millions of random event sequences, no processes, no setup. Run the exact same code in production as a supervised `gen_statem` process. There's nothing to switch. The callback module is always both.
+
+```elixir
+# Pure -- in your tests, LiveView, Oban workers, scripts
+machine = Crank.new(MyApp.Submission) |> Crank.crank(:validate) |> Crank.crank(:bind)
+
+# Process -- in production, with supervision, timeouts, and telemetry
+{:ok, pid} = Crank.Server.start_link(MyApp.Submission, [])
+Crank.Server.cast(pid, :validate)
+```
+
+Same `handle_event/4`. Same logic. Two callers.
 
 ## How state machines evolved in Erlang and Elixir
 

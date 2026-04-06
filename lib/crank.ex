@@ -1,6 +1,8 @@
 defmodule Crank do
   @moduledoc """
-  A behaviour for finite state machines as pure, testable data structures.
+  Write your state machine logic once. Test it with pure functions. Run the
+  exact same code in production as a supervised `gen_statem` process. There's
+  nothing to switch — the callback module is always both.
 
   ## How state machines evolved
 
