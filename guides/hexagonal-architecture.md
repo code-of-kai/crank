@@ -10,7 +10,7 @@ Crank has two layers:
                     ┌─────────────────────────┐
                     │      Pure Core           │
                     │                           │
-  events ──────►   │  handle_event/4           │  ──────► new state
+  events ──────►   │  handle/3                 │  ──────► new state
                     │  on_enter/3               │  ──────► effects (data)
                     │                           │
                     └─────────────────────────┘
@@ -23,7 +23,7 @@ Crank has two layers:
                     └─────────────────────────┘
 ```
 
-The pure core is the domain. `handle_event/4` is the inbound port -- events
+The pure core is the domain. `handle/3` is the inbound port -- events
 go in, state transitions come out. Telemetry is the outbound port -- the
 Server broadcasts what happened, and anyone can listen.
 
@@ -265,11 +265,11 @@ transition (the initial `:enter` event) fires immediately on process start.
 
 ## Anti-patterns
 
-### Don't put side effects in handle_event/4
+### Don't put side effects in handle/3
 
 ```elixir
 # BAD -- breaks pure core
-def handle_event(_, :ship, :paid, data) do
+def handle(:ship, :paid, data) do
   MyApp.Mailer.send_shipped_email(data.email)  # side effect!
   {:next_state, :shipped, data}
 end
@@ -314,11 +314,11 @@ def handle(_event, _measurements, meta, _config) do
 end
 ```
 
-### Don't attach handlers inside handle_event/4
+### Don't attach handlers inside handle/3
 
 ```elixir
 # BAD -- attaches a new handler on every transition
-def handle_event(_, :pay, :pending, data) do
+def handle(:pay, :pending, data) do
   :telemetry.attach("notify-#{data.order_id}", ...)
   {:next_state, :paid, data}
 end

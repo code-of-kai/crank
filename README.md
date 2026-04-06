@@ -65,19 +65,43 @@ The pure core (`Crank.crank/2`) is a function that takes a machine and an event 
 
 For data scoping, Crank supports struct-per-state -- each state is its own struct with exactly the fields that exist in that state (see [Struct states](#struct-states) below). A `%Dispensing{}` can't have a `change` field because the field doesn't exist on that struct. This recovers the guarantee that Erlang's function-per-state model provided, but as portable data instead of a running process.
 
-## Why not just use gen_statem?
+## Why not just use GenServer?
 
-You can. Crank's `handle_event/4` callback is `:gen_statem`'s `handle_event_function` mode verbatim, and the Server is a ~100-line pass-through. If your machine will always live in a process, gen_statem alone is fine.
+Most Elixir developers never touch `gen_statem`. They use GenServer with a `%{status: :accepting}` field and pattern match on it in their `handle_call` and `handle_cast` clauses. That IS a state machine -- it's just not a formal one. And for many cases, it's sufficient.
 
-Crank exists for the cases where that's not enough:
+A GenServer that tracks a vending machine through `:idle` → `:accepting` → `:dispensing` with pattern matching on the status field is fine. It's readable. It's testable. Every Elixir developer knows how to work with it.
 
-**Property testing.** Crank's test suite runs 26 properties at 10,000 iterations each -- roughly 100 million random cranks in ~20 seconds. That's feasible because `crank/2` returns a struct. No `start_link`/`stop` per iteration, no `:sys.get_state`, no process lifecycle noise. Pure functions compose with StreamData trivially; processes don't.
+The question is: when does the informal approach stop being enough?
 
-**Non-process hosts.** LiveView reducers, Oban workers, Phoenix.Channel assigns, ETS-backed workflows -- these are real contexts where you need FSM logic but spawning a gen_statem would be architecturally wrong. With Crank, the same callback module works in both contexts without adaptation.
+**State-dependent timeouts.** "If we're in `:dispensing`, fire a jam timeout after 5 seconds. If we're in `:accepting`, fire an inactivity timeout after 60 seconds." GenServer has one timeout mechanism. `gen_statem` has per-state timeouts. That's a real feature gap.
 
-**Effect inspection.** When a callback returns `[{:state_timeout, 5_000, :jam_timeout}]`, pure code stores it in `machine.effects` as inert data. You can assert on exactly what effects a transition *would* produce without executing them. gen_statem executes effects immediately -- there's no way to inspect intent separately from execution.
+**State enter callbacks.** "Every time we enter `:dispensing`, emit telemetry and log it." GenServer doesn't have enter callbacks. You can simulate them, but it's manual and error-prone.
 
-**When Crank probably isn't worth it:** If your machine is always supervised, never tested with random sequences, and you don't need the logic outside a process, the pure layer is overhead. Use gen_statem directly.
+**Pure testing at scale.** Crank's test suite runs 26 properties at 10,000 iterations each -- roughly 100 million random event sequences in ~20 seconds. That's feasible because `crank/2` returns a struct. No `start_link`/`stop` per iteration, no `:sys.get_state`, no process lifecycle noise. Pure functions compose with StreamData trivially; processes don't.
+
+**Formal exhaustiveness.** In a GenServer, any message can arrive in any state. In Crank, you explicitly handle or reject events per state. Unhandled events crash immediately -- they don't silently fall through.
+
+**Non-process hosts.** LiveView reducers, Oban workers, Phoenix.Channel assigns, ETS-backed workflows -- these need FSM logic but spawning a `gen_statem` would be architecturally wrong. Crank's pure mode is simpler than GenServer for these contexts -- it's a function call, not a process.
+
+**Effect inspection.** When a callback returns `[{:state_timeout, 5_000, :jam_timeout}]`, pure code stores it in `machine.effects` as inert data. You can assert on exactly what effects a transition *would* produce without executing them. `gen_statem` executes effects immediately -- there's no way to inspect intent separately from execution.
+
+### When GenServer is enough
+
+A cache doesn't need a state machine. A connection pool doesn't need a state machine. A simple request handler doesn't need a state machine. Infrastructure plumbing that doesn't model business states and transitions is better served by GenServer, Agent, or a plain module.
+
+### When Crank earns its place
+
+Business logic IS states and transitions. A customer is in a state: prospect, active, churning, dormant. A submission is in a state: received, validating, eligible, declined. A policy is in a state: quoted, bound, active, lapsed, renewed. Business rules ARE transition rules: "you can't bind without quoting first," "when the underwriter approves, the submission moves from review to eligible."
+
+Every business rule is: given this state and this event, what happens next? That's the definition of a finite state machine.
+
+The question was never whether business logic is a state machine. It always is. The question is whether you make it explicit or implicit. A GenServer with scattered pattern matches across `handle_call` clauses is a state machine that hides itself. A Crank callback module where each `handle/3` clause declares a state, an event, and a transition is a state machine that's honest about what it is.
+
+Both are state machines. One is readable.
+
+Crank's contribution is making the explicit version as cheap as the implicit one. A `handle/3` clause is no more complex than a `handle_call` with pattern matching on `state.status`. The ceremony that `gen_statem` added -- callback modes, process coupling, untestable runtime integration -- is gone. Explicit is now free, so there's no reason to hide your state machine inside a GenServer.
+
+Start with `Crank.crank/2` (pure, no process). Promote to `Crank.Server` (supervised `gen_statem`) when you need timeouts, supervision, or replies. The promotion is a deployment decision, not a rewrite.
 
 ## How it works
 
