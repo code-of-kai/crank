@@ -4,7 +4,7 @@
 
 # Crank
 
-[![License](https://img.shields.io/hexpm/l/crank.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Pure state machines for Elixir. Testable data structures first, optional `gen_statem` process adapter.
 
