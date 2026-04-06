@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Write your state machine logic once. Test it with pure functions -- millions of random event sequences, no processes, no setup. Run the exact same code in production as a supervised `gen_statem` process. There's nothing to switch. The callback module is always both.
+Write your state machine logic once. Test it with property tests -- millions of random event sequences, no processes, no setup. Run the exact same code in production as a supervised `gen_statem` process. When you need to change a state or add a transition, change the callback module, run the property tests, and deploy. There's nothing to switch between pure and process -- the callback module is always both.
 
 ```elixir
 # Pure -- in your tests, LiveView, Oban workers, scripts

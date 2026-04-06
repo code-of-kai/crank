@@ -1,8 +1,11 @@
 defmodule Crank do
   @moduledoc """
-  Write your state machine logic once. Test it with pure functions. Run the
-  exact same code in production as a supervised `gen_statem` process. There's
-  nothing to switch — the callback module is always both.
+  Write your state machine logic once. Test it with property tests — millions
+  of random event sequences, no processes, no setup. Run the exact same code
+  in production as a supervised `gen_statem` process. When you change a state
+  or add a transition, change the callback module, run the property tests,
+  and deploy. There's nothing to switch between pure and process — the
+  callback module is always both.
 
   ## How state machines evolved
 
