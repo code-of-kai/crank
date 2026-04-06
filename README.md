@@ -109,9 +109,17 @@ defmodule MyApp.VendingMachine do
     {:next_state, :ready, %{data | balance: data.balance + 100}}
   end
 
-  def handle(:select, :ready, data), do: {:next_state, :vending, data}
-  def handle(:dispense, :vending, data), do: {:next_state, :idle, %{data | balance: 0}}
-  def handle(:refund, :ready, data), do: {:stop, :refunded, %{data | balance: 0}}
+  def handle(:select, :ready, data) do
+    {:next_state, :vending, data}
+  end
+
+  def handle(:dispense, :vending, data) do
+    {:next_state, :idle, %{data | balance: 0}}
+  end
+
+  def handle(:refund, :ready, data) do
+    {:stop, :refunded, %{data | balance: 0}}
+  end
 end
 ```
 
