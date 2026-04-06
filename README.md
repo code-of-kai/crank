@@ -65,7 +65,7 @@ Crank separates the two concerns that OTP fused together in `gen_fsm`: state mac
 
 The pure core (`Crank.crank/2`) is a function that takes a machine and an event and returns a new machine. No process, no mailbox, no side effects. The process shell (`Crank.Server`) wraps the same callback module in `gen_statem` when you need timeouts, supervision, and telemetry. Same logic, both modes. Write it once, test it pure, run it in production as a process.
 
-For data scoping, Crank supports struct-per-state -- each state is its own struct with exactly the fields that exist in that state (see [Struct states](#struct-states) below). A `%Dispensing{}` can't have a `change` field because the field doesn't exist on that struct. This recovers the guarantee that Erlang's function-per-state model provided, but as portable data instead of a running process.
+For data scoping, Crank supports struct-per-state -- each state is its own struct with exactly the fields that exist in that state (see [Struct states](#struct-states) below). A `%Dispensing{}` can't have a `change` field because the field doesn't exist on that struct. This is domain modeling where the types enforce the invariants -- making illegal states unrepresentable. It recovers the guarantee that Erlang's function-per-state model provided, but as portable data instead of a running process.
 
 ## Why not just use GenServer?
 
@@ -82,15 +82,15 @@ Valim says start simple. Crank's starting point is simpler than what he recommen
 
 Most Elixir developers use GenServer with a `%{status: :accepting}` field and pattern match on it in their `handle_call` and `handle_cast` clauses. That IS a state machine -- it's just not a formal one.
 
-The Elixir ecosystem has spent a decade building out its infrastructure layer: Ecto for persistence, Phoenix for web, Oban for background jobs, Broadway for data pipelines, Bandit for HTTP. Caches, connection pools, pubsub brokers, HTTP clients -- all built, all mature, all excellent. That infrastructure exists to support one thing: your business logic. As the infrastructure layer matures and gets solved, what remains is the business logic. And business logic IS states and transitions.
+The Elixir ecosystem has spent a decade building out its infrastructure layer: Ecto for persistence, Phoenix for web, Oban for background jobs, Broadway for data pipelines, Bandit for HTTP. Caches, connection pools, pubsub brokers, HTTP clients -- all built, all mature, all excellent. That infrastructure exists to support one thing: your domain. As the infrastructure layer matures and gets solved, what remains is the domain model and its business logic. And a domain model IS states and transitions.
 
-A customer is in a state: prospect, active, churning, dormant. A submission is in a state: received, validating, eligible, declined. A policy is in a state: quoted, bound, active, lapsed, renewed. Business rules ARE transition rules: "you can't bind without quoting first," "when the underwriter approves, move from review to eligible."
+A customer is in a state: prospect, active, churning, dormant. A submission is in a state: received, validating, eligible, declined. A policy is in a state: quoted, bound, active, lapsed, renewed. Business rules ARE transition rules: "you can't bind without quoting first," "when the underwriter approves, move from review to eligible." The states are the domain model. The transitions are the business logic. Together, they're a state machine.
 
-Every business rule is: given this state and this event, what happens next? That's the definition of a finite state machine. The question was never whether your business logic is a state machine. It always is. The question is whether you make it explicit or implicit.
+Every business rule is: given this state and this event, what happens next? That's the definition of a finite state machine. The question was never whether your domain has a state machine in it. It always does. The question is whether you make it explicit or implicit.
 
-A GenServer with scattered pattern matches across `handle_call` clauses is a state machine that hides itself. A Crank callback module where each `handle/3` clause declares a state, an event, and a transition is a state machine that's honest about what it is. Both are state machines. One is readable.
+A GenServer with scattered pattern matches across `handle_call` clauses is a domain model that hides itself. A Crank callback module where each `handle/3` clause declares a state, an event, and a transition is a domain model that's honest about what it is. Both are state machines. One is readable.
 
-The reason people hid their state machines inside GenServers was cost. `gen_statem` added ceremony -- callback modes, process coupling, untestable runtime integration. Crank eliminates that cost. A `handle/3` clause is no more complex than a `handle_call` with pattern matching on `state.status`. Explicit is now as cheap as implicit, so there's no reason to pretend your business logic isn't a state machine.
+The reason people hid their domain models inside GenServers was cost. `gen_statem` added ceremony -- callback modes, process coupling, untestable runtime integration. Crank eliminates that cost. A `handle/3` clause is no more complex than a `handle_call` with pattern matching on `state.status`. Explicit is now as cheap as implicit, so there's no reason to pretend your domain isn't a state machine.
 
 ### When you need the process
 
@@ -310,13 +310,15 @@ Attach handlers for persistence, notifications, audit logging, PubSub -- see the
 
 ## Struct states
 
-The standard Elixir approach is one struct with a `:status` atom and every field present in every state:
+Domain-driven design says: make illegal states unrepresentable. The standard Elixir approach does the opposite -- one struct with a `:status` atom and every field present in every state:
 
 ```elixir
 %VendingMachine{status: :dispensing, balance: 100, selection: "A3", change: nil, error: nil}
 # change shouldn't be here. error shouldn't be here.
 # But nothing stops it. You have to know which fields matter.
 ```
+
+This is an anemic domain model. The shape doesn't encode the rules. Any field is accessible in any state, and nothing in the type system prevents you from reading `change` during `:dispensing` or setting `error` during `:idle`.
 
 Crank supports an alternative: each state is its own struct. The struct defines exactly what data exists in that state. No optional fields, no "only set when the state is X" comments:
 
@@ -348,7 +350,7 @@ When the compiler can check this (expected mid-2026+), unhandled state variants 
 
 ## Design principles
 
-- **Pure core, effectful shell.** Business logic is pure data transformation. Side effects live at the boundary.
+- **Pure core, effectful shell.** Domain logic is pure data transformation. Side effects live at the boundary. This is [hexagonal architecture](guides/hexagonal-architecture.md) by construction, not by convention.
 - **No magic.** Crank passes `:gen_statem` types and return values through unchanged. If you know `:gen_statem`, you know Crank.
 - **No hidden state.** No `states/0` callback, no registered names, no catch-all defaults. Function clauses declare the machine.
 - **Let it crash.** Unhandled events are bugs. Crank surfaces them immediately.
