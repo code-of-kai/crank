@@ -352,7 +352,7 @@ When the compiler can check this (expected mid-2026+), unhandled state variants 
 - **No magic.** Crank passes `:gen_statem` types and return values through unchanged. If you know `:gen_statem`, you know Crank.
 - **No hidden state.** No `states/0` callback, no registered names, no catch-all defaults. Function clauses declare the machine.
 - **Let it crash.** Unhandled events are bugs. Crank surfaces them immediately.
-- **Auditable.** Small enough to read in one sitting. No framework, just a library.
+- **Auditable.** ~400 lines. You can read every line of Crank in one sitting and verify exactly what it does. No framework, just a library.
 
 See [DESIGN.md](DESIGN.md) for the full specification and rationale behind every decision.
 
