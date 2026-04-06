@@ -36,7 +36,7 @@ Two things got lost in this transition:
 
 1. **Data scoping.** In `locked/2`, you could only see what `locked/2` was given. In a GenServer with `%{status: :quoted, violations: [], policy: nil, ...}`, you can see everything, always. Nothing stops you from reading `policy` when the status is `:quoted`.
 
-2. **Testability without processes.** Both `gen_fsm` and `gen_statem` trap state inside a running process. You can't test a transition without starting one. You can't inspect intermediate states without sending messages. You can't pipe events through a chain and look at the result.
+2. **State machine logic without a process.** Both `gen_fsm` and `gen_statem` fuse state machine logic to a running process. You can't test a transition without starting one. You can't inspect intermediate states without sending messages. You can't pipe events through a chain and look at the result. The logic isn't extractable.
 
 ## What Crank recovers
 

@@ -12,7 +12,7 @@ defmodule Crank do
   adopted GenServer as its primary OTP abstraction, and GenServer has no concept
   of states — just one blob of data with a status atom. The function-per-state
   model didn't carry over. Two things got lost: data scoping (every handler can
-  see every field) and testability without processes.
+  see every field) and the ability to use state machine logic without a process.
 
   ## What Crank recovers
 
