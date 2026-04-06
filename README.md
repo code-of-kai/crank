@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.jpg" alt="Crank" width="200">
+</p>
+
 # Crank
 
 [![License](https://img.shields.io/hexpm/l/crank.svg)](LICENSE)

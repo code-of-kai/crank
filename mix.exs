@@ -45,13 +45,14 @@ defmodule Crank.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
-      files: ~w(lib guides .formatter.exs mix.exs README.md LICENSE CHANGELOG.md DESIGN.md)
+      files: ~w(lib guides assets .formatter.exs mix.exs README.md LICENSE CHANGELOG.md DESIGN.md)
     ]
   end
 
   defp docs do
     [
       main: "Crank",
+      logo: "assets/logo.jpg",
       source_ref: "v#{@version}",
       extras: ["guides/hexagonal-architecture.md", "CHANGELOG.md", "DESIGN.md"],
       groups_for_extras: [
