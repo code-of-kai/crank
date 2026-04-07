@@ -6,26 +6,205 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`Crank.crank(machine, event)` takes a state machine struct and an event and returns a new struct. No process. No mailbox. No `start_link`. When the same logic needs timeouts and supervision, `Crank.Server` runs it as a managed process. Same module, same functions, different caller.
+`Crank.crank(machine, event)` -- a pure function call that advances a state machine. No process required. Promote to a supervised `gen_statem` when needed. Same module, no rewrite.
 
-```
-Write logic ──→ Test pure ──→ Deploy as process
-                    ↑                │
-                    └─ Change logic ←─┘
-```
+## Quick start
+
+Define a state machine by implementing the `Crank` behaviour (an interface contract -- define specific functions, Crank calls them):
 
 ```elixir
-# Pure -- tests, LiveView, Oban workers, scripts
-machine = Crank.new(MyApp.VendingMachine) |> Crank.crank({:coin, 25}) |> Crank.crank({:select, "A3"})
+defmodule MyApp.VendingMachine do
+  use Crank
 
-# Process -- production, with supervision, timeouts, and telemetry
-{:ok, pid} = Crank.Server.start_link(MyApp.VendingMachine, [])
+  @impl true
+  def init(opts), do: {:ok, :idle, %{price: opts[:price] || 100, balance: 0, stock: 10}}
+
+  @impl true
+  def handle({:coin, amount}, :idle, data) do
+    {:next_state, :accepting, %{data | balance: amount}}
+  end
+
+  def handle({:coin, amount}, :accepting, data) do
+    {:next_state, :accepting, %{data | balance: data.balance + amount}}
+  end
+
+  def handle({:select, _item}, :accepting, %{balance: bal, price: price} = data)
+      when bal >= price do
+    {:next_state, :dispensing, data, [{:state_timeout, 5_000, :jam_timeout}]}
+  end
+
+  def handle(:dispensed, :dispensing, %{balance: bal, price: price} = data) do
+    remaining = data.stock - 1
+    change = bal - price
+
+    cond do
+      change > 0 ->
+        {:next_state, :making_change, %{data | stock: remaining, balance: change}}
+      remaining == 0 ->
+        {:next_state, :out_of_stock, %{data | stock: 0, balance: 0}}
+      true ->
+        {:next_state, :idle, %{data | stock: remaining, balance: 0}}
+    end
+  end
+
+  def handle(:change_returned, :making_change, data) do
+    if data.stock == 0 do
+      {:next_state, :out_of_stock, %{data | balance: 0}}
+    else
+      {:next_state, :idle, %{data | balance: 0}}
+    end
+  end
+
+  def handle(:restock, :out_of_stock, data) do
+    {:next_state, :idle, %{data | stock: 10}}
+  end
+
+  def handle(:cancel, :accepting, data) do
+    {:next_state, :making_change, data}
+  end
+end
+```
+
+### Pure usage
+
+No process, no setup, no cleanup:
+
+```elixir
+machine =
+  MyApp.VendingMachine
+  |> Crank.new(price: 75)
+  |> Crank.crank({:coin, 25})
+  |> Crank.crank({:coin, 50})
+  |> Crank.crank({:select, "A3"})
+
+machine.state   #=> :dispensing
+machine.effects #=> [{:state_timeout, 5_000, :jam_timeout}]
+```
+
+### Process usage
+
+Same module, now supervised with timeouts and telemetry:
+
+```elixir
+{:ok, pid} = Crank.Server.start_link(MyApp.VendingMachine, price: 75)
 Crank.Server.cast(pid, {:coin, 25})
+Crank.Server.call(pid, :status)  # when there's a {:call, from} clause
 ```
 
 Same module. Same functions. Two callers.
 
-## The problem Crank solves
+## What just happened
+
+The module above is a complete state machine. `init/1` returned the starting state and initial data. Each `handle/3` clause declared one transition -- this event, in this state, produces this outcome. `Crank.crank/2` called those functions and returned a new struct. The sections below explain each part.
+
+### Callback signature
+
+The primary callback is `handle/3`. Crank calls it every time an event arrives, passing the event, the current state, and the accumulated data. It returns the next state:
+
+```elixir
+def handle(event, state, data)
+```
+
+| Argument | What it is |
+|---|---|
+| `event` | The event payload |
+| `state` | Current state |
+| `data` | Accumulated machine data |
+
+```elixir
+def handle({:coin, amount}, :accepting, data) do
+  {:next_state, :accepting, %{data | balance: data.balance + amount}}
+end
+```
+
+When the function needs the event type (to send replies, distinguish timeouts, or handle raw process messages), use `handle_event/4`. It matches `gen_statem`'s `handle_event_function` callback mode exactly:
+
+```elixir
+def handle_event(event_type, event_content, state, data)
+```
+
+| `event_type` | `:internal`, `:cast`, `{:call, from}`, `:info`, `:timeout`, `:state_timeout`, `{:timeout, name}` |
+|---|---|
+
+If a module exports `handle_event/4`, Crank uses it instead of `handle/3`. For mixed usage, add a catch-all delegation:
+
+```elixir
+# Server-only: reply to synchronous calls
+def handle_event({:call, from}, :status, state, data) do
+  {:keep_state, data, [{:reply, from, state}]}
+end
+
+# Everything else delegates to handle/3
+def handle_event(_, event, state, data), do: handle(event, state, data)
+```
+
+### The struct
+
+After each `crank/2` call, the returned `%Crank.Machine{}` struct has five fields:
+
+- `module` -- the callback module (so the struct knows which functions to call)
+- `state` -- the current state (any Elixir term -- atoms, structs, tuples)
+- `data` -- whatever `init/1` and `handle/3` have accumulated
+- `effects` -- side effects from the last transition, stored as data (never executed)
+- `status` -- `:running` or `{:stopped, reason}`
+
+### Return values
+
+Every `handle/3` clause returns a tuple that tells Crank what to do next:
+
+- `{:next_state, new_state, new_data}` -- move to a different state
+- `{:next_state, new_state, new_data, actions}` -- move and declare side effects
+- `{:keep_state, new_data}` -- stay in the same state, update the data
+- `{:keep_state, new_data, actions}` -- stay and declare side effects
+- `:keep_state_and_data` -- nothing changes
+- `{:keep_state_and_data, actions}` -- nothing changes but declare side effects
+- `{:stop, reason, new_data}` -- shut down the machine
+
+These match `gen_statem`'s return values exactly.
+
+### Effects as data
+
+When a callback returns actions (timeouts, replies, postpone), the pure core stores them in `machine.effects` as inert data. It never executes them. `Crank.Server` executes them via `gen_statem`.
+
+```elixir
+def handle({:select, _item}, :accepting, %{balance: bal, price: price} = data)
+    when bal >= price do
+  {:next_state, :dispensing, data, [{:state_timeout, 5_000, :jam_timeout}]}
+end
+```
+
+```elixir
+machine = Crank.crank(machine, {:select, "A3"})
+machine.effects
+#=> [{:state_timeout, 5_000, :jam_timeout}]
+```
+
+Each `crank/2` call replaces `effects`. They don't accumulate across pipeline stages.
+
+### Enter callbacks
+
+Optional. Crank calls `on_enter/3` after a state change, passing the old state, the new state, and the data:
+
+```elixir
+@impl true
+def on_enter(_old_state, _new_state, data) do
+  {:keep_state, Map.put(data, :transitioned_at, System.monotonic_time())}
+end
+```
+
+### Stopped machines
+
+`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further cranks raise `Crank.StoppedError`. Use `crank!/2` in tests to raise immediately on stop results.
+
+### Unhandled events
+
+No catch-all. Unhandled events crash with `FunctionClauseError`. This is deliberate -- a state machine that silently ignores events is hiding bugs. Let it crash; let the supervisor handle it.
+
+## Why Crank exists
+
+That's the full API. The rest of this document explains why Crank exists, how it compares to GenServer, and where state machines fit in domain-driven design.
+
+### The problem Crank solves
 
 State machine logic in Erlang started as plain functions calling functions. Each state was a function. The data available in each state was whatever that function received -- nothing more. The logic was portable and testable because it was just functions.
 
@@ -70,7 +249,7 @@ The call stack scoped the data. The logic was just functions -- callable directl
 
 </details>
 
-## How Crank compares to GenServer
+### How Crank compares to GenServer
 
 José Valim's consistent advice: start simple, promote to complex when needed. Plain functions before GenServer. GenServer before `gen_statem`.
 
@@ -171,212 +350,6 @@ Crank.Server adds what pure functions can't provide:
 
 **Pure testing at scale.** Crank's test suite runs 26 properties at 10,000 iterations each -- roughly 100 million random event sequences in ~20 seconds. No `start_link`/`stop` per iteration. Pure functions compose with StreamData trivially; processes don't.
 
-## Pure mode vs. process mode
-
-One callback module works in both modes. `Crank.crank/2` calls the callbacks directly as a pure function. `Crank.Server` calls the same callbacks through `gen_statem`. There's nothing to switch on or off.
-
-| | Pure | Process |
-|---|---|---|
-| **API** | `Crank.new/2` + `Crank.crank/2` | `Crank.Server.start_link/3` |
-| **Returns** | A `%Crank.Machine{}` struct | A supervised `gen_statem` process |
-| **Side effects** | None -- effects stored as inert data | Executed by `gen_statem` |
-| **Telemetry** | None | `[:crank, :transition]` on every state change |
-| **Good for** | Tests, LiveView reducers, Oban workers, scripts | Production supervision, timeouts, replies |
-
-The development workflow: write the logic, test it purely with property tests (millions of random event sequences), deploy it as a supervised process. When a state or transition changes, change the callback module and rerun the property tests. If they pass, the process version works too -- it's the same code. The only difference is who calls the functions and what happens to the effects afterward.
-
-## Quick start
-
-Define a state machine by implementing the `Crank` behaviour (an interface contract -- define specific functions, Crank calls them):
-
-```elixir
-defmodule MyApp.VendingMachine do
-  use Crank
-
-  @impl true
-  def init(opts), do: {:ok, :idle, %{price: opts[:price] || 100, balance: 0, stock: 10}}
-
-  @impl true
-  def handle({:coin, amount}, :idle, data) do
-    {:next_state, :accepting, %{data | balance: amount}}
-  end
-
-  def handle({:coin, amount}, :accepting, data) do
-    {:next_state, :accepting, %{data | balance: data.balance + amount}}
-  end
-
-  def handle({:select, _item}, :accepting, %{balance: bal, price: price} = data)
-      when bal >= price do
-    {:next_state, :dispensing, data, [{:state_timeout, 5_000, :jam_timeout}]}
-  end
-
-  def handle(:dispensed, :dispensing, %{balance: bal, price: price} = data) do
-    remaining = data.stock - 1
-    change = bal - price
-
-    cond do
-      change > 0 ->
-        {:next_state, :making_change, %{data | stock: remaining, balance: change}}
-      remaining == 0 ->
-        {:next_state, :out_of_stock, %{data | stock: 0, balance: 0}}
-      true ->
-        {:next_state, :idle, %{data | stock: remaining, balance: 0}}
-    end
-  end
-
-  def handle(:change_returned, :making_change, data) do
-    if data.stock == 0 do
-      {:next_state, :out_of_stock, %{data | balance: 0}}
-    else
-      {:next_state, :idle, %{data | balance: 0}}
-    end
-  end
-
-  def handle(:restock, :out_of_stock, data) do
-    {:next_state, :idle, %{data | stock: 10}}
-  end
-
-  def handle(:cancel, :accepting, data) do
-    {:next_state, :making_change, data}
-  end
-end
-```
-
-### Pure usage
-
-No process, no setup, no cleanup:
-
-```elixir
-machine =
-  MyApp.VendingMachine
-  |> Crank.new(price: 75)
-  |> Crank.crank({:coin, 25})
-  |> Crank.crank({:coin, 50})
-  |> Crank.crank({:select, "A3"})
-
-machine.state   #=> :dispensing
-machine.effects #=> [{:state_timeout, 5_000, :jam_timeout}]
-```
-
-### Process usage
-
-Full OTP supervision and `gen_statem` power:
-
-```elixir
-{:ok, pid} = Crank.Server.start_link(MyApp.VendingMachine, price: 75)
-Crank.Server.cast(pid, {:coin, 25})
-Crank.Server.call(pid, :status)  # when there's a {:call, from} clause
-```
-
-### Callback signature
-
-The primary callback is `handle/3`. Crank calls it every time an event arrives, passing the event, the current state, and the accumulated data. It returns the next state:
-
-```elixir
-def handle(event, state, data)
-```
-
-| Argument | What it is |
-|---|---|
-| `event` | The event payload |
-| `state` | Current state |
-| `data` | Accumulated machine data |
-
-```elixir
-def handle({:coin, amount}, :accepting, data) do
-  {:next_state, :accepting, %{data | balance: data.balance + amount}}
-end
-```
-
-When the function needs the event type (to send replies, distinguish timeouts, or handle raw process messages), use `handle_event/4`. It matches `gen_statem`'s `handle_event_function` callback mode exactly:
-
-```elixir
-def handle_event(event_type, event_content, state, data)
-```
-
-| `event_type` | `:internal`, `:cast`, `{:call, from}`, `:info`, `:timeout`, `:state_timeout`, `{:timeout, name}` |
-|---|---|
-
-If a module exports `handle_event/4`, Crank uses it instead of `handle/3`. For mixed usage, add a catch-all delegation:
-
-```elixir
-# Server-only: reply to synchronous calls
-def handle_event({:call, from}, :status, state, data) do
-  {:keep_state, data, [{:reply, from, state}]}
-end
-
-# Everything else delegates to handle/3
-def handle_event(_, event, state, data), do: handle(event, state, data)
-```
-
-### Return values
-
-Every `handle/3` clause returns a tuple that tells Crank what to do next:
-
-- `{:next_state, new_state, new_data}` -- move to a different state
-- `{:next_state, new_state, new_data, actions}` -- move and declare side effects
-- `{:keep_state, new_data}` -- stay in the same state, update the data
-- `{:keep_state, new_data, actions}` -- stay and declare side effects
-- `:keep_state_and_data` -- nothing changes
-- `{:keep_state_and_data, actions}` -- nothing changes but declare side effects
-- `{:stop, reason, new_data}` -- shut down the machine
-
-These match `gen_statem`'s return values exactly.
-
-### Effects as data
-
-When a callback returns actions (timeouts, replies, postpone), the pure core stores them in `machine.effects` as inert data. It never executes them. `Crank.Server` executes them via `gen_statem`.
-
-```elixir
-def handle({:select, _item}, :accepting, %{balance: bal, price: price} = data)
-    when bal >= price do
-  {:next_state, :dispensing, data, [{:state_timeout, 5_000, :jam_timeout}]}
-end
-```
-
-```elixir
-machine = Crank.crank(machine, {:select, "A3"})
-machine.effects
-#=> [{:state_timeout, 5_000, :jam_timeout}]
-```
-
-Each `crank/2` call replaces `effects`. They don't accumulate across pipeline stages.
-
-### Enter callbacks
-
-Optional. Crank calls `on_enter/3` after a state change, passing the old state, the new state, and the data:
-
-```elixir
-@impl true
-def on_enter(_old_state, _new_state, data) do
-  {:keep_state, Map.put(data, :transitioned_at, System.monotonic_time())}
-end
-```
-
-### Stopped machines
-
-`{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further cranks raise `Crank.StoppedError`. Use `crank!/2` in tests to raise immediately on stop results.
-
-### Unhandled events
-
-No catch-all. Unhandled events crash with `FunctionClauseError`. This is deliberate -- a state machine that silently ignores events is hiding bugs. Let it crash; let the supervisor handle it.
-
-## Telemetry
-
-`Crank.Server` emits a `[:crank, :transition]` event on every state change. Telemetry (Erlang's standard library for emitting observable events from running code) lets adapters react to transitions without the domain model knowing they exist:
-
-```elixir
-%{
-  module: MyApp.VendingMachine,
-  from: :idle,             # nil on initial enter
-  to: :accepting,
-  event: {:coin, 25},      # nil on enter
-  data: %{price: 75, balance: 25, stock: 10}
-}
-```
-
-Attach handlers for persistence, notifications, audit logging, PubSub -- see the [Hexagonal Architecture guide](guides/hexagonal-architecture.md) for patterns.
-
 ## Struct-per-state: making illegal states unrepresentable
 
 The standard Elixir approach uses one struct with a `:status` atom and every field present in every state:
@@ -416,6 +389,22 @@ The type annotations are written for Elixir's set-theoretic type system (introdu
 ```
 
 When the compiler can check this (expected mid-2026+), unhandled state variants will produce compiler warnings with zero code changes. Until then, property tests enforce the same guarantee dynamically -- see `Crank.Examples.Submission` for the full example.
+
+## Telemetry
+
+`Crank.Server` emits a `[:crank, :transition]` event on every state change. Telemetry (Erlang's standard library for emitting observable events from running code) lets adapters react to transitions without the domain model knowing they exist:
+
+```elixir
+%{
+  module: MyApp.VendingMachine,
+  from: :idle,             # nil on initial enter
+  to: :accepting,
+  event: {:coin, 25},      # nil on enter
+  data: %{price: 75, balance: 25, stock: 10}
+}
+```
+
+Attach handlers for persistence, notifications, audit logging, PubSub -- see the [Hexagonal Architecture guide](guides/hexagonal-architecture.md) for patterns.
 
 ## Design principles
 
