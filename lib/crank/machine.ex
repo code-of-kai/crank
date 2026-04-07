@@ -1,30 +1,31 @@
 defmodule Crank.Machine do
   @moduledoc """
-  The core data structure representing a finite state machine.
+  The struct that `Crank.crank/2` takes and returns.
 
-  A `%Crank.Machine{}` is a pure value — it holds the current state,
-  accumulated data, and any effects produced by the last crank.
-  It never executes side effects. The optional `Crank.Server` process
-  adapter interprets and executes effects; in pure code, you
-  inspect them directly.
+  `%Crank.Machine{}` carries five fields:
 
-  ## Fields
+    * `:module` -- the callback module that defines the machine's transitions
+    * `:state` -- the current state (any term: atoms, structs, tagged tuples)
+    * `:data` -- data shared across all states, carried through every crank
+    * `:effects` -- side effects from the last crank, stored as inert data
+    * `:status` -- `:running` or `{:stopped, reason}`
 
-    * `:module` — the callback module implementing the `Crank` behaviour
-    * `:state` — the current state (any term — atoms, structs, tagged tuples;
-      see `Crank.Examples.Submission` for the struct-per-state pattern)
-    * `:data` — arbitrary user data carried through cranks
-    * `:effects` — effects returned by the most recent crank,
-      stored as data for the caller or Server to interpret
-    * `:status` — `:running` or `{:stopped, reason}`
+  The struct never executes side effects. It stores them. `Crank.Server`
+  interprets and executes effects when the machine runs as a process. In
+  pure code, inspect them directly.
+
+  Each call to `Crank.crank/2` replaces the effects list. Effects from
+  earlier cranks don't accumulate.
 
   ## Parameterized types
 
-  `t/0` is the generic type used inside Crank's own code. For precise
-  typing in your own modules, use `t/2`:
+  `t/0` is the generic type. For precise typing in your own modules,
+  use `t/2` with concrete state and data types:
 
       @spec get_machine() :: Crank.Machine.t(:locked | :unlocked, map())
 
+  See `Crank.Examples.Submission` for the struct-per-state pattern,
+  where each state is its own struct.
   """
 
   @enforce_keys [:module, :state, :data]
@@ -40,30 +41,28 @@ defmodule Crank.Machine do
   # Action types — mirrors :gen_statem action vocabulary
   # ---------------------------------------------------------------------------
 
-  @typedoc "A reply action for synchronous calls."
+  @typedoc "Sends a reply to a caller waiting on `Crank.Server.call/3`."
   @type reply_action :: {:reply, GenServer.from(), term()}
 
-  @typedoc "Event timeout — fires if no event arrives within the period."
+  @typedoc "Fires if no event arrives within the given period."
   @type event_timeout ::
           {:timeout, non_neg_integer() | :infinity, term()}
           | {:timeout, non_neg_integer() | :infinity, term(), keyword()}
 
-  @typedoc "State timeout — fires if the machine stays in this state for the period."
+  @typedoc "Fires if the machine stays in the current state for the given period."
   @type state_timeout ::
           {:state_timeout, non_neg_integer() | :infinity, term()}
           | {:state_timeout, non_neg_integer() | :infinity, term(), keyword()}
 
-  @typedoc "Named (generic) timeout — identified by a caller-chosen name."
+  @typedoc "A timeout identified by a caller-chosen name. Multiple named timeouts can run concurrently."
   @type named_timeout ::
           {{:timeout, term()}, non_neg_integer() | :infinity, term()}
           | {{:timeout, term()}, non_neg_integer() | :infinity, term(), keyword()}
 
-  @typedoc "Inject a synthetic event into the machine's own mailbox."
+  @typedoc "Injects a new event into the machine's own event queue."
   @type next_event_action :: {:next_event, Crank.event_type(), term()}
 
-  @typedoc """
-  Any gen_statem action that can appear in an effects list.
-  """
+  @typedoc "Any `gen_statem` action that can appear in an effects list."
   @type action ::
           :postpone
           | :hibernate
@@ -77,7 +76,7 @@ defmodule Crank.Machine do
   # Status type
   # ---------------------------------------------------------------------------
 
-  @typedoc "The lifecycle status of the machine."
+  @typedoc "`:running` while the machine accepts events. `{:stopped, reason}` after it shuts down."
   @type status :: :running | {:stopped, reason :: term()}
 
   # ---------------------------------------------------------------------------
@@ -85,9 +84,7 @@ defmodule Crank.Machine do
   # ---------------------------------------------------------------------------
 
   @typedoc """
-  A machine with specific state and data types.
-
-  Use this in your own code for precise typing:
+  A machine parameterized by its state and data types.
 
       @spec checkout_machine() :: Crank.Machine.t(:cart | :payment | :complete, Order.t())
   """
@@ -99,6 +96,6 @@ defmodule Crank.Machine do
           status: status()
         }
 
-  @typedoc "A machine with unparameterized (generic) state and data."
+  @typedoc "A machine with generic (unparameterized) state and data types."
   @type t :: t(term(), term())
 end

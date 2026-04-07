@@ -39,14 +39,8 @@ end
 
 defmodule Crank.Examples.Order do
   @moduledoc """
-  A non-trivial, total state machine for testing.
-
-  5 states, 8 events, effects, on_enter. Every event is handled in
-  every state (total function) — invalid events in a given state are
-  explicitly ignored via `:keep_state_and_data`. This makes it safe
-  for property testing with random event sequences.
-
-  State diagram:
+  An order that moves through five states: pending, paid, shipped,
+  delivered, and cancelled.
 
       pending ──pay──→ paid ──ship──→ shipped ──deliver──→ delivered
         │                │                │
@@ -54,19 +48,24 @@ defmodule Crank.Examples.Order do
                          ↑
         (any state)──cancel──→ cancelled
 
-  All states handle :note (appends to notes list, keep_state).
-  :paid and :shipped return effects (state timeouts).
-  on_enter/3 logs every transition.
+  Every event is handled in every state. Invalid events in a given
+  state return `:keep_state_and_data` -- they're explicitly ignored,
+  not silently dropped. This makes the machine a total function
+  (every input produces a defined output), which is what property
+  testing with random event sequences requires.
+
+  The `:paid` and `:shipped` states return state timeout effects.
+  `on_enter/3` logs every transition. All states accept `:note`.
   """
   use Crank
 
   @states [:pending, :paid, :shipped, :delivered, :cancelled]
   @events [:pay, :ship, :deliver, :cancel, :note, :rush, :refund, :noop]
 
-  @doc "All valid states."
+  @doc "Returns the list of all valid state atoms."
   def states, do: @states
 
-  @doc "All valid events."
+  @doc "Returns the list of all valid event atoms."
   def events, do: @events
 
   @impl true
@@ -145,35 +144,39 @@ end
 
 defmodule Crank.Examples.Submission do
   @moduledoc """
-  Wlaschin-style state machine: each state is its own struct.
+  A submission workflow where each state is its own struct.
 
-  Demonstrates the "Making Illegal States Unrepresentable" pattern where
-  each state carries only the data that exists in that state. A `%Quoted{}`
-  can't have a `violations` field because the field doesn't exist on that
-  struct. A `%Bound{}` can't have a `quotes` list — the field is gone.
+  `%Validating{}` has a `violations` field. `%Quoted{}` has `quotes`
+  and `selected`. `%Bound{}` has `quote` and `bound_at`. Each struct
+  carries only the fields that exist in that state. A `%Quoted{}`
+  can't have a `violations` field because the struct doesn't define
+  one. The compiler enforces this.
 
-  State structs carry state-specific data. The `data` map carries
-  cross-cutting concerns shared across all states (parameters, audit log).
-
-  Within-type mutations (e.g., adding a violation to `%Validating{}`) use
-  `{:next_state, %Validating{updated}, data}` — the state value changed,
-  so it's a state transition. `:keep_state` is reserved for changes to `data` only.
-
-  State diagram:
+  This is Scott Wlaschin's "Making Illegal States Unrepresentable"
+  pattern. It works in Crank without any special support because
+  `Machine.state` is `term()` -- structs are valid states.
 
       Validating ──validate──→ Quoted ──bind──→ Bound
           │                      │
           └──decline──→ Declined ←──decline──┘
 
-  Total function: every (state, event) pair is handled.
+  State structs carry state-specific data. The `data` map carries
+  cross-cutting concerns shared across all states (parameters, audit).
+
+  When a field on the current state struct changes (adding a violation
+  to `%Validating{}`), the return is `{:next_state, %Validating{updated}, data}`.
+  The state value changed, so it's a state transition. `:keep_state`
+  is reserved for changes to `data` only.
+
+  Every event is handled in every state (total function).
 
   ## Type annotations
 
-  The `@type state` union and `@spec` annotations below are written to
-  align with Elixir's set-theoretic type system. Today they serve as
-  documentation and dialyzer input. When the compiler can infer and
-  check them (expected mid-2026+), unhandled state variants will
-  produce compiler warnings without any code changes.
+  The `@type state` union below lists every valid state struct. Today
+  these annotations serve as documentation and Dialyzer input. When
+  Elixir's set-theoretic type system (introduced in v1.17) can check
+  them, unhandled state variants will produce compiler warnings
+  without any code changes.
   """
   use Crank
 
@@ -205,13 +208,13 @@ defmodule Crank.Examples.Submission do
 
   # --- Type union: the set of all valid states ---
 
-  @typedoc "The union of all valid submission states."
+  @typedoc "One of the four state structs: `Validating`, `Quoted`, `Bound`, or `Declined`."
   @type state :: Validating.t() | Quoted.t() | Bound.t() | Declined.t()
 
-  @typedoc "Cross-cutting data shared across all states."
+  @typedoc "Data shared across all states: parameters and an audit trail."
   @type data :: %{parameters: map(), audit: [term()]}
 
-  @typedoc "Events that drive the submission state machine."
+  @typedoc "Events the submission machine accepts."
   @type event ::
           {:violation, atom()}
           | :validate
@@ -222,11 +225,11 @@ defmodule Crank.Examples.Submission do
           | :note
           | :noop
 
-  @doc "All state struct modules."
+  @doc "Returns the list of all state struct modules."
   @spec state_modules() :: [module()]
   def state_modules, do: [Validating, Quoted, Bound, Declined]
 
-  @doc "All valid event atoms (tuple events generated separately)."
+  @doc "Returns the list of atom events. Tuple events (`:violation`, `:add_quote`, `:select`) are generated separately in tests."
   @spec events() :: [atom()]
   def events, do: [:validate, :bind, :decline, :note, :noop]
 

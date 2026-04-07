@@ -1,14 +1,15 @@
 defmodule Crank.Server do
   @moduledoc """
-  A thin `:gen_statem` adapter that runs a `Crank` callback module as
-  a supervised OTP process.
+  Runs a `Crank` callback module as a supervised `gen_statem` process.
 
-  The Server delegates all crank logic to the pure callback module,
-  then executes any effects (timeouts, replies, postpone, etc.)
-  via `:gen_statem`'s action system. It also emits telemetry on every
-  successful transition.
+  The Server calls the same `handle/3` or `handle_event/4` functions
+  that `Crank.crank/2` calls. It adds what pure functions can't do:
+  execute timeouts, send replies, emit telemetry on every transition,
+  and integrate with OTP supervision.
 
-  ## Usage
+  ## Two ways to use it
+
+  **Separate logic and server modules:**
 
       defmodule MyApp.DoorServer do
         use Crank.Server, logic: MyApp.Door
@@ -17,7 +18,7 @@ defmodule Crank.Server do
       {:ok, pid} = Crank.Server.start_link(MyApp.DoorServer, [])
       Crank.Server.cast(pid, :unlock)
 
-  Or inline (the logic module *is* the server module):
+  **Inline -- the logic module is the server module:**
 
       defmodule MyApp.Door do
         use Crank
@@ -31,12 +32,13 @@ defmodule Crank.Server do
         def handle_event(_, :lock, :unlocked, data), do: {:next_state, :locked, data}
       end
 
+  Both produce a supervised process. The callback module doesn't change.
   """
 
-  @typedoc "Server name for process registration."
+  @typedoc "A pid, registered name, or `{name, node}` tuple identifying a running server."
   @type server :: GenServer.server()
 
-  @typedoc "Return type for `start_link/3`."
+  @typedoc "Return value of `start_link/3`."
   @type on_start :: {:ok, pid()} | :ignore | {:error, term()}
 
   @doc false
@@ -64,12 +66,11 @@ defmodule Crank.Server do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Start a `Crank.Server` process linked to the caller.
+  Starts a `Crank.Server` process linked to the calling process.
 
-  `module` is the callback module implementing the `Crank` behaviour.
-  `args` are passed to `module.init/1`.
-  `opts` supports `:name` for process registration, plus any
-  `:gen_statem` start options (`:debug`, `:spawn_opt`, etc.).
+  Crank calls `module.init(args)` to get the starting state and data.
+  Pass `:name` in `opts` to register the process. All other options
+  are forwarded to `:gen_statem.start_link/3` (`:debug`, `:spawn_opt`, etc.).
   """
   @spec start_link(module(), args :: term(), keyword()) :: on_start()
   def start_link(module, args, opts \\ []) do
@@ -83,7 +84,7 @@ defmodule Crank.Server do
   end
 
   @doc """
-  Send an asynchronous event to the server.
+  Sends an asynchronous event to the server. Returns `:ok` immediately.
   """
   @spec cast(server(), event :: term()) :: :ok
   def cast(server, event) do
@@ -91,7 +92,10 @@ defmodule Crank.Server do
   end
 
   @doc """
-  Send a synchronous event and wait for a reply.
+  Sends a synchronous event and waits for the server to reply.
+
+  The callback module replies using `{:reply, from, response}` in its
+  effects list. Times out after `timeout` milliseconds (default 5000).
   """
   @spec call(server(), event :: term(), timeout()) :: term()
   def call(server, event, timeout \\ 5000) do
