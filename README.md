@@ -88,7 +88,6 @@ Same module, now supervised with timeouts and telemetry:
 ```elixir
 {:ok, pid} = Crank.Server.start_link(MyApp.VendingMachine, price: 75)
 Crank.Server.cast(pid, {:coin, 25})
-Crank.Server.call(pid, :status)  # when there's a {:call, from} clause
 ```
 
 Same module. Same functions. Two callers.
@@ -99,7 +98,7 @@ The module above is a complete state machine. `init/1` returned the starting sta
 
 ### Callback signature
 
-The primary callback is `handle/3`. Crank calls it every time an event arrives, passing the event, the current state, and the accumulated data. It returns the next state:
+The primary callback is `handle/3`. Crank calls it every time an event arrives, passing the event, the current state, and the accumulated data. It returns a tuple describing what happens next:
 
 ```elixir
 def handle(event, state, data)
@@ -126,7 +125,7 @@ def handle_event(event_type, event_content, state, data)
 | `event_type` | `:internal`, `:cast`, `{:call, from}`, `:info`, `:timeout`, `:state_timeout`, `{:timeout, name}` |
 |---|---|
 
-If a module exports `handle_event/4`, Crank uses it instead of `handle/3`. For mixed usage, add a catch-all delegation:
+If a module exports `handle_event/4`, Crank uses it instead of `handle/3`. When a module defines both, add a catch-all delegation:
 
 ```elixir
 # Server-only: reply to synchronous calls
@@ -160,11 +159,11 @@ Every `handle/3` clause returns a tuple that tells Crank what to do next:
 - `{:keep_state_and_data, actions}` -- nothing changes but declare side effects
 - `{:stop, reason, new_data}` -- shut down the machine
 
-These match `gen_statem`'s return values exactly.
+These match `gen_statem`'s return values exactly. `gen_statem` calls them "actions." Crank stores them in the `machine.effects` field. Same thing, two names.
 
 ### Effects as data
 
-When a callback returns actions (timeouts, replies, postpone), the pure core stores them in `machine.effects` as inert data. It never executes them. `Crank.Server` executes them via `gen_statem`.
+When a callback returns actions, the pure core stores them in `machine.effects` as inert data. It never executes them. `Crank.Server` executes them via `gen_statem`.
 
 ```elixir
 def handle({:select, _item}, :accepting, %{balance: bal, price: price} = data)
@@ -372,7 +371,9 @@ defmodule MakingChange, do: defstruct [:change]
 defmodule OutOfStock,   do: defstruct []
 ```
 
-This works because `Crank.Machine.state` is `term()` -- atoms, structs, tagged tuples all work. Pattern matching on the struct type gives the state and its data in one destructure:
+A `%Dispensing{}` can't have a `change` field because the struct doesn't define one. Try `%Dispensing{change: 5}` and the compiler rejects it. The shape of the data enforces the rules of the state.
+
+This works in Crank because `Crank.Machine.state` is `term()` -- atoms, structs, tagged tuples are all valid states. Pattern matching on the struct type gives the state and its data in one destructure:
 
 ```elixir
 def handle({:select, item}, %Accepting{balance: bal}, data) when bal >= data.price do
@@ -380,7 +381,7 @@ def handle({:select, item}, %Accepting{balance: bal}, data) when bal >= data.pri
 end
 ```
 
-State-specific data lives in the struct. Cross-cutting concerns (price, stock count, machine location) live in `data`. When a field changes on the current state struct, use `{:next_state, %SameType{updated}, data}` -- the state value changed, so it's a transition. `:keep_state` is reserved for `data`-only changes.
+State-specific data lives in the struct. Cross-cutting concerns (price, stock count, machine location) live in `data`. Elixir structs are immutable -- `%Accepting{balance: 25}` and `%Accepting{balance: 50}` are two different values. That's a state change. Use `{:next_state, ...}`. `:keep_state` means the state is literally the same value -- only `data` changed. This matters because `{:next_state, ...}` triggers `on_enter/3` and `:keep_state` does not.
 
 The type annotations are written for Elixir's set-theoretic type system (introduced in v1.17), which lets the compiler reason about union types and warn when a function doesn't handle all variants:
 
@@ -408,7 +409,7 @@ Attach handlers for persistence, notifications, audit logging, PubSub -- see the
 
 ## Design principles
 
-- **Pure core, effectful shell.** Domain logic is pure data transformation. Side effects live at the boundary. This is [hexagonal architecture](guides/hexagonal-architecture.md) by construction, not by convention.
+- **Pure core, effectful shell** (sometimes called functional core, imperative shell). Domain logic is pure data transformation -- same input, same output, no side effects. Side effects live at the boundary. This is [hexagonal architecture](guides/hexagonal-architecture.md) -- the architecture makes the wrong thing impossible, not merely discouraged.
 - **No magic.** Crank passes `gen_statem` types and return values through unchanged. Learning `gen_statem` is learning Crank.
 - **No hidden state.** No `states/0` callback, no registered names, no catch-all defaults. Function clauses declare the machine.
 - **Let it crash.** Unhandled events are bugs. Crank surfaces them immediately.

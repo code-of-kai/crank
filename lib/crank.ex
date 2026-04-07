@@ -9,7 +9,7 @@ defmodule Crank do
   a new struct. That's the whole interface.
 
   There's no process involved, no message passing, no supervision tree.
-  It's a function that takes a struct and an event and returns a new struct.
+  It's a pure function -- same input, same output, no side effects.
   You can call it in a test, in a LiveView, in an Oban worker, in a script.
   Anywhere you can call a function.
 
@@ -51,7 +51,8 @@ defmodule Crank do
   that a transition happened — a timestamp, a counter, a log entry —
   without cluttering the transition logic itself.
 
-  That's everything. The rest is pattern matching.
+  That's every concept. The variety comes from writing more clauses for
+  different events and states.
 
   ## The struct
 
@@ -80,7 +81,8 @@ defmodule Crank do
   failure. Maybe another process needs to send it a message and get a reply.
 
   `Crank.Server` handles this. It takes the same module — the exact same
-  one, unchanged — and runs the functions inside OTP's `gen_statem`:
+  one, unchanged — and runs the functions inside `gen_statem`
+  (Erlang/Elixir's built-in state machine process):
 
       {:ok, pid} = Crank.Server.start_link(MyApp.VendingMachine, price: 75)
       Crank.Server.cast(pid, {:coin, 25})
@@ -410,8 +412,6 @@ defmodule Crank do
   If the function returns actions (timeouts, replies), they're stored in
   `machine.effects` as inert data. Each `crank/2` replaces effects from
   the previous call — they don't accumulate.
-
-  Works naturally in pipelines:
 
   ## Examples
 

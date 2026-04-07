@@ -8,7 +8,7 @@
 
 - **Explicit over implicit.** Every decision is visible in the code.
 - **Behaviours and pattern matching.** No DSLs. A behaviour is an interface contract -- define the functions, the framework calls them. Pattern matching is how Elixir dispatches to the right function clause based on the shape of the arguments.
-- **Pure core.** Business logic lives in pure functions. Processes are optional.
+- **Pure core, effectful shell** (sometimes called functional core, imperative shell). Business logic lives in pure functions -- same input, same output, no side effects. Processes are optional.
 - **Function clauses declare the machine.** No redundant `states/0` callback. The set of `handle/3` clauses IS the specification.
 - **Full `gen_statem` power** preserved in the Server. Nothing amputated.
 - **Small surface area.** The API is `new/2`, `crank/2`, and `crank!/2`. Pipelines work naturally because `crank/2` takes and returns the same struct.
@@ -149,7 +149,7 @@ The Server is a pass-through.
 
 ## Struct-per-state
 
-This pattern originates from Scott Wlaschin's "Making Illegal States Unrepresentable." Crank supports it without any core changes because `Machine.state` is `term()` -- atoms, structs, tagged tuples all work.
+This pattern originates from Scott Wlaschin's "Making Illegal States Unrepresentable." Each state is its own struct, so a `%Dispensing{}` can't have a `change` field -- the struct doesn't define one, and the compiler rejects it. Crank supports this without any core changes because `Machine.state` is `term()` -- atoms, structs, tagged tuples all work.
 
 ### How it works
 
@@ -179,7 +179,7 @@ This maps cleanly to `gen_statem`'s `(state, data)` separation.
 
 ### Within-type mutations
 
-When a field on the current state struct changes (e.g., accumulating balance), use `{:next_state, ...}` -- the state value changed:
+Elixir structs are immutable. `%Accepting{balance: 25}` and `%Accepting{balance: 50}` are two different values. That's a state change -- use `{:next_state, ...}`:
 
 ```elixir
 def handle({:coin, amount}, %Accepting{balance: bal} = s, data) do
@@ -187,7 +187,7 @@ def handle({:coin, amount}, %Accepting{balance: bal} = s, data) do
 end
 ```
 
-`:keep_state` is reserved for changes to `data` only. Using `{:next_state, ...}` triggers `on_enter`, which is correct -- the state did change.
+`:keep_state` means the state is literally the same value -- only `data` changed. This matters because `{:next_state, ...}` triggers `on_enter/3` and `:keep_state` does not.
 
 ## Compiler-checked exhaustiveness (future)
 

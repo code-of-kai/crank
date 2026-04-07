@@ -46,7 +46,7 @@ They don't import each other. They don't call each other. They communicate throu
 
 This separation has a name: hexagonal architecture (also called ports and adapters). The domain model lives in the center and knows nothing about infrastructure. Infrastructure plugs in at the boundary as adapters. The domain never reaches out -- it declares what happened, and the adapters decide what to do about it.
 
-Crank enforces this boundary by construction. There's no discipline required -- the architecture prevents the leak.
+Crank enforces this boundary automatically. The `handle/3` callback returns data -- it can't execute side effects because there's nothing to execute them with. The architecture makes the wrong thing impossible, not merely discouraged.
 
 ## How the boundary works
 

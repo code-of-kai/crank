@@ -49,10 +49,11 @@ defmodule Crank.Examples.Order do
         (any state)──cancel──→ cancelled
 
   Every event is handled in every state. Invalid events in a given
-  state return `:keep_state_and_data` -- they're explicitly ignored,
-  not silently dropped. This makes the machine a total function
-  (every input produces a defined output), which is what property
-  testing with random event sequences requires.
+  state hit the catch-all clause and return `:keep_state_and_data` --
+  a deliberate no-op. Without the catch-all, unhandled events would
+  crash with `FunctionClauseError`. This makes the machine a total
+  function (every input produces a defined output), which is what
+  property testing with random event sequences requires.
 
   The `:paid` and `:shipped` states return state timeout effects.
   `on_enter/3` logs every transition. All states accept `:note`.
@@ -152,9 +153,14 @@ defmodule Crank.Examples.Submission do
   can't have a `violations` field because the struct doesn't define
   one. The compiler enforces this.
 
-  This is Scott Wlaschin's "Making Illegal States Unrepresentable"
-  pattern. It works in Crank without any special support because
-  `Machine.state` is `term()` -- structs are valid states.
+  Scott Wlaschin called this pattern "Making Illegal States
+  Unrepresentable." Each state is its own struct, so a `%Quoted{}`
+  can't have a `violations` field -- the struct doesn't define one.
+  The compiler rejects it.
+
+  Crank doesn't need a special mode for this. The `state` field
+  accepts any Elixir term. Structs are terms. So struct-per-state
+  works out of the box.
 
       Validating ──validate──→ Quoted ──bind──→ Bound
           │                      │
@@ -163,10 +169,12 @@ defmodule Crank.Examples.Submission do
   State structs carry state-specific data. The `data` map carries
   cross-cutting concerns shared across all states (parameters, audit).
 
-  When a field on the current state struct changes (adding a violation
-  to `%Validating{}`), the return is `{:next_state, %Validating{updated}, data}`.
-  The state value changed, so it's a state transition. `:keep_state`
-  is reserved for changes to `data` only.
+  Elixir structs are immutable. `%Validating{violations: []}` and
+  `%Validating{violations: [:age]}` are two different values. That's
+  a state change -- use `{:next_state, %Validating{updated}, data}`.
+  `:keep_state` means the state is literally the same value -- only
+  `data` changed. This matters because `{:next_state, ...}` triggers
+  `on_enter/3` and `:keep_state` does not.
 
   Every event is handled in every state (total function).
 
