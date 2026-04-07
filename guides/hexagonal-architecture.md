@@ -1,18 +1,18 @@
 # Hexagonal Architecture with Crank
 
-## Why this matters
+## The problem: infrastructure leaking into domain logic
 
-The hardest problem in software architecture isn't building features. It's keeping the domain model — the states, transitions, and business rules that define what your system actually does — separate from the infrastructure that supports it.
+When a state machine callback calls `Repo.insert!`, tests need a database. When it calls `Mailer.send`, a LiveView reducer sends emails. When it calls an HTTP client, tests hit the network.
 
-When domain logic imports Ecto, it can't run without a database. When it imports Phoenix, it can't run without a web server. When it calls a mailer, your tests send emails. Every infrastructure dependency that leaks into the domain model makes it harder to test, harder to reason about, and harder to change.
+Each infrastructure dependency that leaks into the domain model (the data structures and rules that represent what a system actually does) makes it harder to test, harder to reason about, and harder to change.
 
-Hexagonal architecture (ports and adapters) solves this by enforcing a boundary: the domain model lives in the center, knows nothing about infrastructure, and communicates with the outside world through ports. Infrastructure plugs in at the boundary as adapters. The domain never reaches out — it declares what happened, and the adapters decide what to do about it.
+Hexagonal architecture (also called ports and adapters) prevents this by enforcing a boundary. The domain model lives in the center and knows nothing about infrastructure. Infrastructure plugs in at the boundary as adapters. The domain never reaches out -- it declares what happened, and the adapters decide what to do about it.
 
-Crank is hexagonal by construction, not by convention. You don't have to discipline yourself into the pattern — the architecture enforces it.
+Crank enforces this boundary by construction. There's no discipline required -- the architecture prevents the leak.
 
-## The architecture you already have
+## How a Crank module enforces the boundary
 
-A Crank callback module is a pure domain model. `handle/3` takes an event and a state, applies the business rules, and returns the next state. It doesn't import anything. It doesn't call anything. It doesn't know about databases, HTTP, email, or queues. It's pure functions operating on plain data.
+A Crank callback module is a pure domain model. `handle/3` takes an event and a state, applies the business rules, and returns the next state. It doesn't import anything. It doesn't call anything. It doesn't know about databases, HTTP, email, or queues:
 
 ```
                     ┌─────────────────────────────┐
@@ -37,11 +37,13 @@ A Crank callback module is a pure domain model. `handle/3` takes an event and a 
                     └─────────────────────────────┘
 ```
 
-The inbound port is `handle/3` — events go in, state transitions come out. The outbound port is telemetry — every state transition emits a `[:crank, :transition]` event, and adapters listen and react. The domain model doesn't know who's listening or what they do. It just declares what happened.
+The inbound port is `handle/3` -- events go in, state transitions come out. The outbound port is telemetry (Erlang's standard library for emitting observable events from running code) -- every state transition emits a `[:crank, :transition]` event, and adapters (infrastructure modules that plug into the telemetry interface) listen and react.
 
-This is why `handle/3` must never contain side effects. The moment you call `Repo.insert!` or `Mailer.send` inside a `handle/3` clause, the domain model is no longer pure. It can't run without infrastructure. Your tests need a database. Your LiveView reducer sends emails. The boundary is broken.
+The domain model doesn't know who's listening or what they do. It just declares what happened.
 
-## What telemetry gives you
+`handle/3` must never contain side effects. The moment `handle/3` calls `Repo.insert!`, the domain model requires a database to run. The moment it calls `Mailer.send`, tests send emails. The boundary is broken.
+
+## Every state change emits a domain event
 
 Every state transition emits `[:crank, :transition]` with this metadata:
 
@@ -55,9 +57,9 @@ Every state transition emits `[:crank, :transition]` with this metadata:
 }
 ```
 
-This is a domain event. It tells you which aggregate changed, what state it moved from and to, what caused it, and what the data looks like after. That's everything an adapter needs to persist, notify, audit, or broadcast — without the domain model knowing any of that happens.
+This is a domain event -- a record of what just happened to the state machine. It tells which module changed, what state it moved from and to, what caused the transition, and what the data looks like after. That's everything an adapter needs to persist, notify, audit, or broadcast -- without the domain model knowing any of that happens.
 
-## Persistence
+## Persistence adapter
 
 Save machine state to a database after every transition:
 
@@ -93,15 +95,17 @@ defmodule MyApp.VendingPersistence do
 end
 ```
 
-Call `MyApp.VendingPersistence.attach()` in your application startup.
+Call `MyApp.VendingPersistence.attach()` in application startup.
 
-Notice what's happening: the vending machine's `handle/3` has no idea this persistence exists. It never imports Ecto. It never calls `Repo`. The persistence adapter listens to domain events and acts on them. You can swap the database, change the schema, or remove persistence entirely — and the domain model doesn't change.
+The vending machine's `handle/3` has no idea this persistence exists. It never imports Ecto (Elixir's database library). It never calls `Repo`. The persistence adapter listens to domain events and acts on them. The database can be swapped, the schema can change, persistence can be removed entirely -- and the domain model doesn't change.
 
 ### When persistence fails
 
-The telemetry handler runs synchronously inside the gen_statem process. If `Repo.insert!` raises, the gen_statem process crashes. The supervisor restarts it. This is usually what you want — if you can't persist a transition, the machine shouldn't continue as if it succeeded.
+The telemetry handler runs synchronously inside the `gen_statem` process. If `Repo.insert!` raises, the `gen_statem` process crashes. The supervisor restarts it.
 
-If you want persistence failure to be non-fatal:
+This is usually the right behavior -- if a transition can't be persisted, the machine shouldn't continue as if it succeeded.
+
+For non-fatal persistence:
 
 ```elixir
 def handle(_event, _measurements, %{module: MyApp.VendingMachine} = meta, _config) do
@@ -116,7 +120,7 @@ end
 
 Choose deliberately. Don't rescue by default.
 
-## Notifications
+## Notification adapter
 
 Alert the operator when the machine needs attention:
 
@@ -142,13 +146,13 @@ defmodule MyApp.VendingNotifications do
 end
 ```
 
-The pattern: match on `to:` to react to specific states. The domain model transitions to `:out_of_stock` because that's what the business rules dictate. The notification adapter decides that this state means "send a restock alert." Those are two different concerns, and they live in two different modules.
+The pattern: match on `to:` to react to specific states. The domain model transitions to `:out_of_stock` because that's what the business rules dictate. The notification adapter decides that this state means "send a restock alert." Two different concerns. Two different modules.
 
-Use `Task.Supervisor` for fire-and-forget. Use Oban when delivery matters.
+Use `Task.Supervisor` for fire-and-forget. Use Oban (a background job library with persistence and retries) when delivery matters.
 
-## Audit logging
+## Audit logging adapter
 
-Every regulated industry needs an audit trail. Every transition in a Crank machine is auditable by default — you just need an adapter to write it down:
+Every regulated industry needs an audit trail. Every transition in a Crank machine is auditable by default -- an adapter writes it down:
 
 ```elixir
 defmodule MyApp.AuditLog do
@@ -176,7 +180,7 @@ defmodule MyApp.AuditLog do
 end
 ```
 
-For compliance, write to an append-only table instead of Logger:
+For compliance, write to an append-only table (a database table where rows are only inserted, never updated or deleted) instead of Logger:
 
 ```elixir
 def handle(_event, _measurements, %{module: MyApp.VendingMachine} = meta, _config) do
@@ -191,11 +195,11 @@ def handle(_event, _measurements, %{module: MyApp.VendingMachine} = meta, _confi
 end
 ```
 
-The domain model doesn't know it's being audited. It doesn't need to. The audit adapter listens to the same domain events as every other adapter. Adding or removing audit logging requires zero changes to the domain model.
+The domain model doesn't know it's being audited. The audit adapter listens to the same domain events as every other adapter. Adding or removing audit logging requires zero changes to the domain model.
 
-## PubSub fan-out
+## PubSub adapter
 
-Broadcast transitions to multiple subscribers (LiveView, WebSocket, etc.):
+PubSub (publish-subscribe) broadcasts transitions to multiple subscribers. A LiveView (Phoenix's server-rendered interactive UI) can update in real time when a machine changes state:
 
 ```elixir
 defmodule MyApp.VendingBroadcast do
@@ -233,9 +237,9 @@ def handle_info({:machine_transition, _from, new_state}, socket) do
 end
 ```
 
-## Wiring it together
+## Wiring adapters at startup
 
-In your application supervisor:
+Attach adapters before starting servers. The first transition (the initial `:enter` event) fires immediately on process start, so adapters must be listening before any server comes up:
 
 ```elixir
 defmodule MyApp.Application do
@@ -254,7 +258,7 @@ defmodule MyApp.Application do
       {Task.Supervisor, name: MyApp.TaskSupervisor},
       {Oban, oban_config()},
       {Phoenix.PubSub, name: MyApp.PubSub},
-      # Start your Crank servers
+      # Start Crank servers after adapters are attached
       {Crank.Server, {MyApp.VendingMachine, [machine_id: "vm-001", price: 75]}}
     ]
 
@@ -262,8 +266,6 @@ defmodule MyApp.Application do
   end
 end
 ```
-
-Attach adapters first. Then start servers. Order matters because the first transition (the initial `:enter` event) fires immediately on process start.
 
 ## Anti-patterns
 
@@ -277,22 +279,22 @@ def handle(:dispense, :dispensing, data) do
 end
 ```
 
-This means `Crank.crank/2` writes to a database. Your tests need a database. Your LiveView reducer writes to a database. The domain model is no longer pure, and the hexagonal boundary is broken.
+This means `Crank.crank/2` writes to a database. Tests need a database. A LiveView reducer writes to a database. The domain model is no longer pure, and the hexagonal boundary is broken.
 
-The domain model decides *what* happens (state transition). Adapters decide *what to do about it* (persist, notify, audit). These are different concerns and they belong in different modules.
+The domain model decides *what* happens (state transition). Adapters decide *what to do about it* (persist, notify, audit). Different concerns, different modules.
 
 ### Don't block the gen_statem with slow adapters
 
 ```elixir
-# BAD -- blocks the domain model for 2+ seconds
+# BAD -- blocks the state machine for 2+ seconds
 def handle(_event, _measurements, meta, _config) do
   HTTPoison.post!("https://slow-api.example.com/webhook", Jason.encode!(meta))
 end
 ```
 
-The telemetry handler runs synchronously in the gen_statem process. While this HTTP call is in flight, the domain model can't process any events.
+The telemetry handler runs synchronously in the `gen_statem` process. While this HTTP call is in flight, the state machine can't process events.
 
-Fix: dispatch async work to a separate process.
+Dispatch async work to a separate process:
 
 ```elixir
 # GOOD -- non-blocking
@@ -325,9 +327,9 @@ end
 
 Attach adapters once at application startup. They receive all transitions and filter by module/state using pattern matching.
 
-## Testing
+## Testing without infrastructure
 
-This is the payoff. The whole point of keeping the domain model pure is that you test it without any infrastructure:
+The domain model is pure, so tests need no infrastructure:
 
 ```elixir
 test "inserting coins and selecting transitions to dispensing" do
@@ -342,9 +344,9 @@ test "inserting coins and selecting transitions to dispensing" do
 end
 ```
 
-No database. No mailer. No PubSub. No mocking. Just pure functions. The domain model doesn't know about persistence, so you don't need to set up persistence to test it. It doesn't know about notifications, so you don't need to mock a mailer.
+No database. No mailer. No PubSub. No mocking. The domain model doesn't know about persistence, so tests don't set up persistence. It doesn't know about notifications, so tests don't mock a mailer.
 
-Test your adapters separately:
+Test adapters separately:
 
 ```elixir
 test "persistence adapter saves machine snapshot" do
@@ -362,6 +364,6 @@ test "persistence adapter saves machine snapshot" do
 end
 ```
 
-Each concern is tested independently. The domain model doesn't know about persistence. The persistence adapter doesn't know about the domain model's internals. They communicate through domain events — the `[:crank, :transition]` telemetry contract.
+Each concern is tested independently. The domain model doesn't know about persistence. The persistence adapter doesn't know about the domain model's internals. They communicate through domain events -- the `[:crank, :transition]` telemetry contract.
 
-That's hexagonal architecture. The domain model is pure. Infrastructure plugs in at the boundary. Neither knows about the other. And you didn't need a framework to get there — the architecture fell out of keeping side effects out of `handle/3`.
+That's hexagonal architecture. The domain model is pure. Infrastructure plugs in at the boundary. Neither knows about the other. The architecture fell out of keeping side effects out of `handle/3`.

@@ -1,74 +1,158 @@
 defmodule Crank do
   @moduledoc """
-  Write your state machine logic once. Test it with property tests — millions
-  of random event sequences, no processes, no setup. Run the exact same code
-  in production as a supervised `gen_statem` process. When you change a state
-  or add a transition, change the callback module, run the property tests,
-  and deploy. There's nothing to switch between pure and process — the
-  callback module is always both.
+  ## What this is
 
-  ## How state machines evolved
+  Crank lets you build a state machine as ordinary data. The machine is a
+  struct, `%Crank.Machine{}`, which holds the current state, whatever data
+  you've accumulated, and any side effects the last transition declared. To
+  advance the machine, you call `Crank.crank(machine, event)`. You get back
+  a new struct. That's the whole interface.
 
-  In plain Erlang (1980s–1990s), state machines were mutually recursive
-  functions. Each state was a function. The data available in each state was
-  whatever that function received — nothing more. The call stack scoped your
-  data, and the logic was just functions you could call directly.
+  There's no process involved, no message passing, no supervision tree.
+  It's a function that takes a struct and an event and returns a new struct.
+  You can call it in a test, in a LiveView, in an Oban worker, in a script.
+  Anywhere you can call a function.
 
-  OTP's `gen_fsm` (late 1990s) formalized this into a behaviour but coupled
-  it to a process — you couldn't use the logic without starting one.
-  `gen_statem` (OTP 19, 2016) replaced `gen_fsm` and added
-  `handle_event_function` mode — one function, state as a parameter, state
-  can be any term. More flexible, but now you're inside one function with
-  access to everything. Still coupled to a process.
+  ## What you write
 
-  Elixir (2012–present) adopted GenServer as its primary abstraction, and
-  GenServer has no state machine primitives at all — just one blob of data
-  with a status atom. Data scoping was lost (every handler sees every field),
-  and state machine logic — which started as plain recursive functions —
-  had been coupled to processes since `gen_fsm` and was now buried inside
-  GenServer handlers.
+  A Crank module is a set of functions. Crank calls them at the right
+  moments — Elixir calls this pattern "callbacks." Define the function;
+  the library calls it back when something happens. The functions are
+  never called directly.
 
-  ## What Crank recovers
+  There are three callbacks:
 
-  Crank separates the two concerns that OTP fused together in `gen_fsm`:
-  state machine logic and process lifecycle. You write one callback module
-  with `handle_event/4` (and optionally `on_enter/3`). That module is always
-  both pure and process-ready — there's nothing to switch:
+  **`init/1`** — Crank calls this once when the machine is created. It
+  returns the starting state and any initial data:
 
-    1. **Pure** — `Crank.new/2` and `Crank.crank/2` call your `handle_event/4`
-       directly as a pure function. Returns a `%Crank.Machine{}` struct. No
-       process, no side effects, no telemetry.
+      def init(opts) do
+        {:ok, :idle, %{price: opts[:price] || 100, balance: 0}}
+      end
 
-    2. **Process** — `Crank.Server` calls the exact same `handle_event/4`
-       through `:gen_statem`. Executes effects, emits telemetry, integrates
-       with supervision trees.
+  **`handle/3`** — Crank calls this every time an event arrives, passing
+  the event, the current state, and the accumulated data. It returns the
+  next state:
 
-  Same function, two callers. Write the logic, test it purely with property
-  tests (thousands of random event sequences), deploy it as a supervised
-  process. When you change a transition or add a state, run the property
-  tests again — if they pass, the process version works too, because it's
-  the same code.
+      def handle({:coin, amount}, :idle, data) do
+        {:next_state, :accepting, %{data | balance: amount}}
+      end
 
-  For data scoping, Crank supports struct-per-state — each state is its own
-  struct with exactly the fields that exist in that state. See
-  `Crank.Examples.Submission` for the full pattern.
+      def handle({:coin, amount}, :accepting, data) do
+        {:next_state, :accepting, %{data | balance: data.balance + amount}}
+      end
 
-  ## Callback Signature
+  Each function clause is one transition. Read it like a sentence: "When a
+  coin arrives and we're idle, move to accepting and record the amount."
+  The set of all clauses is the complete specification of the state machine.
+  There's nothing else to configure, no tables to fill in, no DSL to learn.
 
-  `handle_event/4` takes four arguments matching `:gen_statem`'s
-  `handle_event_function` callback mode exactly: event type, event content,
-  state, and data.
+  **`on_enter/3`** — Optional. Crank calls this after a state change,
+  passing the old state, the new state, and the data. Useful for recording
+  that a transition happened — a timestamp, a counter, a log entry —
+  without cluttering the transition logic itself.
 
-    * `:internal` — programmatic events (pure cranks, `{:next_event, :internal, _}`)
-    * `:cast` — async events via `Crank.Server.cast/2`
-    * `{:call, from}` — sync events via `Crank.Server.call/3` (reply with `{:reply, from, reply}`)
-    * `:info` — raw messages from linked processes
-    * `:timeout` / `:state_timeout` / `{:timeout, name}` — timer events
+  That's everything. The rest is pattern matching.
 
-  In pure code, the event type is always `:internal`. Match on `_` if you don't
-  need to distinguish.
+  ## The struct
+
+  After each `crank/2` call, you get back a `%Crank.Machine{}` with five
+  fields:
+
+    * `module` — the callback module (so the struct knows which functions to call)
+    * `state` — the current state (an atom, a struct, a tuple — any Elixir term)
+    * `data` — whatever your `init/1` and `handle/3` have accumulated
+    * `effects` — side effects from the last transition, stored as data (never executed)
+    * `status` — `:running` or `{:stopped, reason}`
+
+  The `effects` field is important. When `handle/3` returns actions like
+  timeouts or replies, the pure core doesn't execute them. It stores them
+  as a list in `effects`. They can be inspected, asserted on in tests, or
+  ignored. They're just data until something decides to act on them.
+
+  Each `crank/2` call replaces `effects` — they don't pile up from previous
+  transitions.
+
+  ## Running it as a process
+
+  Everything above works without a process. But sometimes you need one.
+  Maybe you want a timeout that fires after 30 seconds of inactivity. Maybe
+  you want the machine to live in a supervision tree so it restarts on
+  failure. Maybe another process needs to send it a message and get a reply.
+
+  `Crank.Server` handles this. It takes the same module — the exact same
+  one, unchanged — and runs the functions inside OTP's `gen_statem`:
+
+      {:ok, pid} = Crank.Server.start_link(MyApp.VendingMachine, price: 75)
+      Crank.Server.cast(pid, {:coin, 25})
+
+  The logic is the same. What changes is the plumbing around it: who calls
+  the functions, and what happens to the effects afterward. In pure mode,
+  effects are stored as data. In process mode, `gen_statem` executes them —
+  timeouts fire, replies get sent, telemetry events are emitted.
+
+  There isn't one module for pure and another for process. There is one
+  module. It works in both contexts because it's just functions.
+
+  ## When you need `handle_event/4`
+
+  `handle/3` is enough for most logic. But when a machine runs as a
+  process, events arrive in different ways. A cast is asynchronous — fire
+  and forget. A call is synchronous — the caller is waiting for a reply.
+  A timeout fires because time passed. A raw message arrives from another
+  process.
+
+  Sometimes the function needs to know which of these happened. That's
+  what `handle_event/4` is for. It's `handle/3` with one extra argument —
+  the event type — prepended:
+
+      def handle_event({:call, from}, :status, state, data) do
+        {:keep_state, data, [{:reply, from, state}]}
+      end
+
+  The event types are:
+
+    * `:internal` — programmatic events (this is what pure `crank/2` always uses)
+    * `:cast` — someone called `Crank.Server.cast(pid, event)`
+    * `{:call, from}` — someone called `Crank.Server.call(pid, event)` and is waiting
+    * `:info` — a raw Erlang message from another process
+    * `:timeout`, `:state_timeout`, `{:timeout, name}` — a timer fired
+
+  If a module defines `handle_event/4`, Crank uses it instead of
+  `handle/3`. If a module needs both — `handle/3` for business logic
+  and `handle_event/4` for replies — the specific clauses go in
+  `handle_event/4`, and a catch-all delegates everything else:
+
+      def handle_event({:call, from}, :status, state, data) do
+        {:keep_state, data, [{:reply, from, state}]}
+      end
+
+      # Everything that isn't a call goes to handle/3
+      def handle_event(_event_type, event, state, data) do
+        handle(event, state, data)
+      end
+
+  ## What you return
+
+  Every `handle/3` (or `handle_event/4`) clause returns a tuple that tells
+  Crank what should happen next. The most common ones:
+
+    * `{:next_state, new_state, new_data}` — move to a different state
+    * `{:next_state, new_state, new_data, actions}` — move and declare side effects
+    * `{:keep_state, new_data}` — stay in the same state, update the data
+    * `{:stop, reason, new_data}` — shut down the machine
+
+  There are a few more (`{:keep_state, new_data, actions}`,
+  `:keep_state_and_data`, `{:keep_state_and_data, actions}`). These match
+  `:gen_statem`'s return values exactly. `{:next_state, ...}` and
+  `{:keep_state, ...}` cover nearly everything.
+
+  The `actions` list is where side effects are declared: timeouts, replies,
+  internal events. In pure mode these get stored in `machine.effects`. In
+  process mode `gen_statem` executes them.
 
   ## Example
+
+  A door with three states — locked, unlocked, opened — and four transitions:
 
       defmodule MyApp.Door do
         use Crank
@@ -77,29 +161,14 @@ defmodule Crank do
         def init(_opts), do: {:ok, :locked, %{}}
 
         @impl true
-        def handle_event(_, :unlock, :locked, data) do
-          {:next_state, :unlocked, data}
-        end
-
-        def handle_event(_, :lock, :unlocked, data) do
-          {:next_state, :locked, data}
-        end
-
-        def handle_event(_, :open, :unlocked, data) do
-          {:next_state, :opened, data}
-        end
-
-        def handle_event(_, :close, :opened, data) do
-          {:next_state, :unlocked, data}
-        end
-
-        # Server-only: reply to synchronous calls
-        def handle_event({:call, from}, :status, state, data) do
-          {:keep_state, data, [{:reply, from, state}]}
-        end
+        def handle(:unlock, :locked, data), do: {:next_state, :unlocked, data}
+        def handle(:lock, :unlocked, data), do: {:next_state, :locked, data}
+        def handle(:open, :unlocked, data), do: {:next_state, :opened, data}
+        def handle(:close, :opened, data), do: {:next_state, :unlocked, data}
       end
 
-      # Pure usage — no process needed
+  Use it:
+
       machine =
         MyApp.Door
         |> Crank.new()
@@ -109,6 +178,10 @@ defmodule Crank do
       machine.state
       #=> :opened
 
+  Four clauses. Four transitions. That's the whole machine. If an event
+  arrives that no clause matches — say, `:open` when the door is `:locked`
+  — Elixir raises a `FunctionClauseError`. That's deliberate. A state
+  machine that silently ignores unexpected events is hiding bugs.
   """
 
   alias Crank.Machine
@@ -118,10 +191,10 @@ defmodule Crank do
   # ---------------------------------------------------------------------------
 
   @typedoc """
-  The type of event being delivered as the first argument to `handle_event/4`.
+  How an event was delivered. This is the first argument to `handle_event/4`.
 
-  Matches `:gen_statem` event types exactly. In pure code (via `crank/2`),
-  the event type is always `:internal`.
+  In pure mode (`crank/2`), the event type is always `:internal`. The other
+  types only appear when the machine runs as a process via `Crank.Server`.
   """
   @type event_type ::
           :internal
@@ -132,16 +205,15 @@ defmodule Crank do
           | :state_timeout
           | {:timeout, name :: term()}
 
-  @typedoc "Result of `init/1`."
+  @typedoc "What `init/1` returns — either `{:ok, state, data}` to start, or `{:stop, reason}` to refuse."
   @type init_result ::
           {:ok, state :: term(), data :: term()}
           | {:stop, reason :: term()}
 
   @typedoc """
-  Result of `handle_event/4`.
-
-  Named type so it can be referenced in specs and documentation.
-  Mirrors `:gen_statem` return values exactly.
+  What `handle/3` or `handle_event/4` returns. The tuple tells Crank what
+  to do next — move to a new state, stay in the current one, or stop.
+  Matches `:gen_statem` return values exactly.
   """
   @type handle_event_result ::
           {:next_state, new_state :: term(), new_data :: term()}
@@ -153,7 +225,7 @@ defmodule Crank do
           | {:keep_state_and_data, actions :: [Machine.action()]}
           | {:stop, reason :: term(), new_data :: term()}
 
-  @typedoc "Result of `on_enter/3`."
+  @typedoc "What `on_enter/3` returns. Can only keep the current state (optionally updating data)."
   @type on_enter_result ::
           {:keep_state, new_data :: term()}
           | {:keep_state, new_data :: term(), actions :: [Machine.action()]}
@@ -163,23 +235,43 @@ defmodule Crank do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Initialise the machine. Return the starting state and data.
+  Crank calls this once when the machine is created. It returns the
+  starting state and any data the machine should carry.
+
+      def init(opts) do
+        {:ok, :idle, %{price: opts[:price] || 100, balance: 0}}
+      end
+
+  Returns `{:ok, state, data}` to start the machine, or `{:stop, reason}`
+  to refuse.
   """
   @callback init(args :: term()) :: init_result()
 
   @doc """
-  Handle an event in the current state.
+  Crank calls this every time an event arrives. This is the full
+  signature — it includes the event type as the first argument, which
+  tells the function *how* the event was delivered.
 
-  Arguments mirror `:gen_statem` exactly:
+  Most of the time the delivery method doesn't matter. `handle/3` drops
+  the event type and is simpler. `handle_event/4` is for when the function
+  needs to reply to a synchronous call, distinguish timeouts from casts,
+  or handle raw process messages:
 
-    1. `event_type` — `:internal`, `:cast`, `{:call, from}`, `:info`, `:timeout`,
-       `:state_timeout`, or `{:timeout, name}`
-    2. `event_content` — the event payload
-    3. `state` — the current state
-    4. `data` ��� the machine's accumulated data
+      # Reply to a synchronous caller
+      def handle_event({:call, from}, :status, state, data) do
+        {:keep_state, data, [{:reply, from, state}]}
+      end
 
-  In pure usage (`Crank.crank/2`), event_type is always `:internal`.
-  Use `_` to ignore it when the clause works in both pure and process contexts.
+  The event types:
+
+    * `:internal` — pure cranks via `Crank.crank/2` (always this in pure mode)
+    * `:cast` — async, via `Crank.Server.cast/2`
+    * `{:call, from}` — sync, via `Crank.Server.call/3` (caller is waiting)
+    * `:info` — raw Erlang message from another process
+    * `:timeout` / `:state_timeout` / `{:timeout, name}` — a timer fired
+
+  If a module defines both `handle_event/4` and `handle/3`, Crank uses
+  `handle_event/4`.
   """
   @callback handle_event(
               event_type :: event_type(),
@@ -189,19 +281,22 @@ defmodule Crank do
             ) :: handle_event_result()
 
   @doc """
-  Handle an event in the current state (simplified signature).
+  Crank calls this every time an event arrives. This is the simplified
+  signature — just the event, the current state, and the data. No event
+  type.
 
-  Drops `event_type` — the first argument of `handle_event/4` — which is
-  `:internal` in pure usage and ignored in most process clauses. Implement
-  this when you don't need to distinguish event types:
+  This is the callback for business logic. Each clause is one transition:
 
-      def handle(:validate, %Validating{violations: []}, data) do
-        {:next_state, %Quoted{}, data}
+      def handle({:coin, amount}, :accepting, data) do
+        {:next_state, :accepting, %{data | balance: data.balance + amount}}
       end
 
-  If a module exports `handle_event/4`, it takes precedence. For mixed
-  usage (e.g., `handle/3` for logic plus `handle_event/4` for replies),
-  add a catch-all delegation:
+  Read it as: "When a coin event arrives and the machine is in the
+  accepting state, stay in accepting and add the amount to the balance."
+
+  If a module also defines `handle_event/4`, Crank uses that instead.
+  This allows process-specific concerns (replies, timeouts) to live in
+  `handle_event/4` while everything else delegates:
 
       def handle_event({:call, from}, :status, state, data) do
         {:keep_state, data, [{:reply, from, state}]}
@@ -216,11 +311,18 @@ defmodule Crank do
             ) :: handle_event_result()
 
   @doc """
-  Called after entering a new state. Optional.
+  Crank calls this after the machine enters a new state. Optional.
 
-  Receives the previous state, the new state, and the current data.
-  Only invoked on actual state changes (when `handle_event/4` returns
-  `{:next_state, ...}`).
+  Receives the state the machine just left, the state it just entered, and
+  the current data. Only fires on actual state changes — when `handle/3`
+  returns `{:next_state, ...}` with a different state.
+
+  Useful for recording that a transition happened without cluttering the
+  transition logic:
+
+      def on_enter(_old_state, _new_state, data) do
+        {:keep_state, Map.put(data, :entered_at, System.monotonic_time())}
+      end
   """
   @callback on_enter(
               old_state :: term(),
@@ -256,11 +358,14 @@ defmodule Crank do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Create a new machine from a callback module.
+  Create a new machine.
 
-  Calls `module.init(args)` and returns a `%Crank.Machine{}` struct.
-  Raises on `{:stop, reason}` from init, or if the module doesn't
-  implement the `Crank` behaviour.
+  Takes a callback module and any arguments for `init/1`. Calls `init/1`,
+  gets the starting state and data, and returns a `%Crank.Machine{}` struct
+  ready to receive events.
+
+  Raises if the module doesn't define the required callbacks, or if
+  `init/1` returns `{:stop, reason}`.
 
   ## Examples
 
@@ -292,16 +397,21 @@ defmodule Crank do
   end
 
   @doc """
-  Crank the machine with a domain event, producing a new machine.
+  Send an event to the machine. Returns a new machine with the updated state.
 
-  The event type is `:internal` — this is a pure, programmatic crank.
-  Returns the updated `%Crank.Machine{}`. If the callback returns
-  `{:stop, reason, data}`, the machine's status becomes `{:stopped, reason}`.
+  This is the core operation. Calls `handle/3` (or `handle_event/4`) with
+  the event, the current state, and the data. Whatever the function returns
+  becomes the new machine.
 
-  Each call replaces `effects` with the effects from this crank
-  only — effects do not accumulate across pipeline stages.
+  If the function returns `{:stop, reason, data}`, the machine's status
+  changes to `{:stopped, reason}`. After that, any further `crank/2` calls
+  raise `Crank.StoppedError` — a stopped machine can't process events.
 
-  Raises `Crank.StoppedError` if the machine has already stopped.
+  If the function returns actions (timeouts, replies), they're stored in
+  `machine.effects` as inert data. Each `crank/2` replaces effects from
+  the previous call — they don't accumulate.
+
+  Works naturally in pipelines:
 
   ## Examples
 
@@ -341,9 +451,12 @@ defmodule Crank do
   end
 
   @doc """
-  Like `crank/2`, but raises on `{:stop, ...}` results.
+  Same as `crank/2`, but raises if the transition stops the machine.
 
-  Useful in tests and scripts where a stop is unexpected.
+  In tests and scripts, a stop usually means something went wrong. This
+  lets you write a pipeline without checking for stops at each step — if
+  any transition returns `{:stop, reason, data}`, you get a
+  `Crank.StoppedError` immediately.
 
   ## Examples
 
