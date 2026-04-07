@@ -1,72 +1,11 @@
 # Hexagonal Architecture with Crank
 
-## The problem: infrastructure leaking into domain logic
+## A persistence adapter in 20 lines
 
-When a state machine callback calls `Repo.insert!`, tests need a database. When it calls `Mailer.send`, a LiveView reducer sends emails. When it calls an HTTP client, tests hit the network.
-
-Each infrastructure dependency that leaks into the domain model (the data structures and rules that represent what a system actually does) makes it harder to test, harder to reason about, and harder to change.
-
-Hexagonal architecture (also called ports and adapters) prevents this by enforcing a boundary. The domain model lives in the center and knows nothing about infrastructure. Infrastructure plugs in at the boundary as adapters. The domain never reaches out -- it declares what happened, and the adapters decide what to do about it.
-
-Crank enforces this boundary by construction. There's no discipline required -- the architecture prevents the leak.
-
-## How a Crank module enforces the boundary
-
-A Crank callback module is a pure domain model. `handle/3` takes an event and a state, applies the business rules, and returns the next state. It doesn't import anything. It doesn't call anything. It doesn't know about databases, HTTP, email, or queues:
-
-```
-                    ┌─────────────────────────────┐
-                    │        Domain Model          │
-                    │       (Pure Core)            │
-                    │                               │
-  events ──────►   │  handle/3                     │  ──────► new state
-                    │  on_enter/3                   │  ──────► effects (data)
-                    │                               │
-                    │  No imports. No side effects. │
-                    │  No infrastructure.           │
-                    └─────────────────────────────┘
-                              │
-                    ┌─────────────────────────────┐
-                    │        Adapters              │
-                    │     (Process Shell)          │
-                    │                               │
-  cast/call ───►   │  Crank.Server (gen_statem)    │  ──────► executed effects
-                    │  Telemetry handlers           │  ──────► persistence
-                    │                               │  ──────► notifications
-                    │                               │  ──────► audit logs
-                    └─────────────────────────────┘
-```
-
-The inbound port is `handle/3` -- events go in, state transitions come out. The outbound port is telemetry (Erlang's standard library for emitting observable events from running code) -- every state transition emits a `[:crank, :transition]` event, and adapters (infrastructure modules that plug into the telemetry interface) listen and react.
-
-The domain model doesn't know who's listening or what they do. It just declares what happened.
-
-`handle/3` must never contain side effects. The moment `handle/3` calls `Repo.insert!`, the domain model requires a database to run. The moment it calls `Mailer.send`, tests send emails. The boundary is broken.
-
-## Every state change emits a domain event
-
-Every state transition emits `[:crank, :transition]` with this metadata:
-
-```elixir
-%{
-  module: MyApp.VendingMachine,
-  from: :idle,
-  to: :accepting,
-  event: {:coin, 25},
-  data: %{price: 75, balance: 25, stock: 10}
-}
-```
-
-This is a domain event -- a record of what just happened to the state machine. It tells which module changed, what state it moved from and to, what caused the transition, and what the data looks like after. That's everything an adapter needs to persist, notify, audit, or broadcast -- without the domain model knowing any of that happens.
-
-## Persistence adapter
-
-Save machine state to a database after every transition:
+This module saves the vending machine's state to a database after every transition:
 
 ```elixir
 defmodule MyApp.VendingPersistence do
-  require Logger
-
   def attach do
     :telemetry.attach(
       "vending-persistence",
@@ -95,11 +34,68 @@ defmodule MyApp.VendingPersistence do
 end
 ```
 
-Call `MyApp.VendingPersistence.attach()` in application startup.
+Call `MyApp.VendingPersistence.attach()` in application startup. The vending machine's `handle/3` has no idea this persistence exists. It never imports Ecto (Elixir's database library). It never calls `Repo`. The persistence adapter listens to domain events and acts on them. The database can be swapped, the schema can change, persistence can be removed entirely -- and the domain model doesn't change.
 
-The vending machine's `handle/3` has no idea this persistence exists. It never imports Ecto (Elixir's database library). It never calls `Repo`. The persistence adapter listens to domain events and acts on them. The database can be swapped, the schema can change, persistence can be removed entirely -- and the domain model doesn't change.
+## What just happened
 
-### When persistence fails
+The vending machine module is pure functions. It takes events, applies business rules, returns the next state. It doesn't know about databases.
+
+The persistence module is infrastructure. It listens for state transitions and writes them to a database. It doesn't know about business rules.
+
+They don't import each other. They don't call each other. They communicate through telemetry (Erlang's standard library for emitting observable events from running code) -- every state transition emits a `[:crank, :transition]` event, and adapters (infrastructure modules that plug into the telemetry interface) listen and react.
+
+This separation has a name: hexagonal architecture (also called ports and adapters). The domain model lives in the center and knows nothing about infrastructure. Infrastructure plugs in at the boundary as adapters. The domain never reaches out -- it declares what happened, and the adapters decide what to do about it.
+
+Crank enforces this boundary by construction. There's no discipline required -- the architecture prevents the leak.
+
+## How the boundary works
+
+```
+                    ┌─────────────────────────────┐
+                    │        Domain Model          │
+                    │       (Pure Core)            │
+                    │                               │
+  events ──────►   │  handle/3                     │  ──────► new state
+                    │  on_enter/3                   │  ──────► effects (data)
+                    │                               │
+                    │  No imports. No side effects. │
+                    │  No infrastructure.           │
+                    └─────────────────────────────┘
+                              │
+                    ┌─────────────────────────────┐
+                    │        Adapters              │
+                    │     (Process Shell)          │
+                    │                               │
+  cast/call ───►   │  Crank.Server (gen_statem)    │  ──────► executed effects
+                    │  Telemetry handlers           │  ──────► persistence
+                    │                               │  ──────► notifications
+                    │                               │  ──────► audit logs
+                    └─────────────────────────────┘
+```
+
+The inbound port is `handle/3` -- events go in, state transitions come out. The outbound port is telemetry -- every state transition emits a `[:crank, :transition]` event, and adapters listen and react.
+
+The domain model doesn't know who's listening or what they do. It just declares what happened.
+
+`handle/3` must never contain side effects. The moment `handle/3` calls `Repo.insert!`, the domain model requires a database to run. The moment it calls `Mailer.send`, tests send emails. The boundary is broken.
+
+## Every state change emits a domain event
+
+Every state transition emits `[:crank, :transition]` with this metadata:
+
+```elixir
+%{
+  module: MyApp.VendingMachine,
+  from: :idle,
+  to: :accepting,
+  event: {:coin, 25},
+  data: %{price: 75, balance: 25, stock: 10}
+}
+```
+
+This is a domain event -- a record of what just happened to the state machine. It tells which module changed, what state it moved from and to, what caused the transition, and what the data looks like after. That's everything an adapter needs to persist, notify, audit, or broadcast -- without the domain model knowing any of that happens.
+
+## When persistence fails
 
 The telemetry handler runs synchronously inside the `gen_statem` process. If `Repo.insert!` raises, the `gen_statem` process crashes. The supervisor restarts it.
 
