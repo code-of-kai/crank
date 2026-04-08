@@ -116,7 +116,7 @@ def handle({:coin, amount}, :accepting, data) do
 end
 ```
 
-When the function needs the event type (to send replies, distinguish timeouts, or handle raw process messages), use `handle_event/4`. It matches `gen_statem`'s `handle_event_function` callback mode exactly:
+`handle/3` drops `event_type`. In pure mode that's fine -- `Crank.crank/2` only delivers internal events, so there's nothing to distinguish. Under `Crank.Server`, though, the same event payload can arrive as `:cast`, `{:call, from}`, `:info`, `:state_timeout`, and more, and `handle/3` sees them all identically. If you need to tell a cast from a call, send a reply, or match on a timeout, use `handle_event/4`. It matches `gen_statem`'s `handle_event_function` callback mode exactly:
 
 ```elixir
 def handle_event(event_type, event_content, state, data)
@@ -337,6 +337,41 @@ end
 
 State machines all the way down. The domain objects are state machines. The coordination between them is a state machine. The pattern scales because the abstraction is the same at every level.
 
+### Testing machines that interact
+
+A common objection to pure state machines: "Sure, one machine in isolation is easy to test. But my real system has an order machine that triggers a payment machine that triggers a fulfillment machine. You can't test that without processes."
+
+You can. The interaction between two machines is a function over two structs. Crank both of them in one test, assert on both:
+
+```elixir
+test "payment confirmation advances the order and starts fulfillment" do
+  order   = Crank.new(MyApp.Order)   |> Crank.crank(:submit)
+  payment = Crank.new(MyApp.Payment) |> Crank.crank({:charge, order.data.total})
+
+  # Payment succeeded -> tell the order
+  assert payment.state == :confirmed
+  order = Crank.crank(order, {:payment_confirmed, payment.data.txn_id})
+
+  assert order.state == :awaiting_fulfillment
+  assert order.effects == [{:next_event, :internal, :request_fulfillment}]
+end
+```
+
+Two machines. One test. No processes, no mailboxes, no `start_link`, no sleeping, no `eventually` helpers. The interaction between them is just function calls on plain structs -- the output of one becomes the input of the next. If a third machine joins the dance, add a third struct to the test. The pattern doesn't change.
+
+Interactions mediated by effects work the same way. When one machine's `handle/3` returns `[{:next_event, ...}]` for another machine, that effect sits in `machine.effects` as inert data. Tests assert on it directly. A small reducer in the test crank-feeds effects from one machine into the next:
+
+```elixir
+defp relay(source, target) do
+  Enum.reduce(source.effects, target, fn
+    {:next_event, _type, event}, acc -> Crank.crank(acc, event)
+    _other, acc -> acc
+  end)
+end
+```
+
+Four lines. That's the whole multi-machine testing infrastructure. The existence of this function is why "pure" doesn't mean "single machine only."
+
 ### What the process adds
 
 Crank.Server adds what pure functions can't provide:
@@ -486,7 +521,7 @@ Use this when audit or time travel matters, or when you want to derive new proje
 
 ### Hybrid
 
-Write both -- snapshots every N events, full event log always. On restore, `Crank.from_snapshot/1` on the latest snapshot, then `Enum.reduce` the events newer than the snapshot's timestamp. Commanded and EventStoreDB use this pattern. It trades implementation complexity for fast restores on long-lived machines.
+Write both -- snapshots every N events, full event log always. On restore, `Crank.from_snapshot/1` on the latest snapshot, then `Enum.reduce` the events newer than the snapshot's timestamp. Commanded and EventStoreDB use this pattern. A machine with a million events restores in one snapshot read plus a few event reads. The cost: two writes per transition, and your adapter owns the case where one write succeeds and the other fails.
 
 ### Schema migration
 

@@ -7,6 +7,20 @@ defmodule Crank.Server do
   execute timeouts, send replies, emit telemetry on every transition,
   and integrate with OTP supervision.
 
+  `handle/3` is convenient in pure mode, where every event is internal
+  and `event_type` is noise. Under the Server, events arrive with real
+  types -- `:cast`, `{:call, from}`, `:info`, `:state_timeout`, and the
+  rest -- and `handle/3` sees them all identically. If you need to
+  distinguish them (to send replies, react to timeouts, or handle raw
+  messages), implement `handle_event/4` instead. A module can define
+  both; when both exist, `handle_event/4` wins and a one-line catch-all
+  can delegate the rest to `handle/3`.
+
+  Every transition emits `[:crank, :transition]` telemetry. This is the
+  integration point for persistence, notifications, audit logs, and
+  PubSub -- see the hexagonal architecture guide and the README's
+  Persistence section.
+
   ## Two ways to use it
 
   **Separate logic and server modules:**
