@@ -274,6 +274,120 @@ defmodule Crank.ServerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Tests — start_from_snapshot
+  # ---------------------------------------------------------------------------
+
+  describe "start_from_snapshot/2 (map form)" do
+    test "starts a process in the snapshotted state" do
+      snapshot = %{module: Door, state: :unlocked, data: %{key: "secret"}}
+
+      {:ok, pid} = Crank.Server.start_from_snapshot(snapshot)
+      assert Crank.Server.call(pid, :status) == :unlocked
+
+      GenServer.stop(pid)
+    end
+
+    test "does not call module.init/1" do
+      # If init were called, the state would be :locked (Door's init returns :locked).
+      # Resuming into :opened proves init was skipped.
+      snapshot = %{module: Door, state: :opened, data: %{key: "default"}}
+
+      {:ok, pid} = Crank.Server.start_from_snapshot(snapshot)
+      assert Crank.Server.call(pid, :status) == :opened
+
+      GenServer.stop(pid)
+    end
+
+    test "supports :name option" do
+      snapshot = %{module: Door, state: :locked, data: %{key: "default"}}
+
+      {:ok, pid} = Crank.Server.start_from_snapshot(snapshot, name: :resumed_door)
+      assert Process.whereis(:resumed_door) == pid
+
+      GenServer.stop(pid)
+    end
+
+    test "resumed machine accepts further events" do
+      snapshot = %{module: Door, state: :unlocked, data: %{key: "default"}}
+
+      {:ok, pid} = Crank.Server.start_from_snapshot(snapshot)
+      Crank.Server.cast(pid, :lock)
+      assert eventually(fn -> Crank.Server.call(pid, :status) == :locked end)
+
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "start_from_snapshot/4 (positional form)" do
+    test "starts a process identically to the map form" do
+      {:ok, pid} = Crank.Server.start_from_snapshot(Door, :unlocked, %{key: "default"}, [])
+      assert Crank.Server.call(pid, :status) == :unlocked
+      GenServer.stop(pid)
+    end
+
+    test "opts argument is optional" do
+      {:ok, pid} = Crank.Server.start_from_snapshot(Door, :locked, %{key: "default"})
+      assert Crank.Server.call(pid, :status) == :locked
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "start_from_snapshot — on_enter suppression" do
+    test "does not fire on_enter/3 on resume" do
+      # DoorWithEnter logs every state entry. Resuming should NOT add an entry.
+      snapshot = %{module: DoorWithEnter, state: :unlocked, data: %{enter_log: []}}
+
+      {:ok, pid} = Crank.Server.start_from_snapshot(snapshot)
+      Process.sleep(20)
+
+      log = Crank.Server.call(pid, :enter_log)
+      assert log == []
+
+      GenServer.stop(pid)
+    end
+
+    test "subsequent transitions still fire on_enter/3" do
+      snapshot = %{module: DoorWithEnter, state: :unlocked, data: %{enter_log: []}}
+
+      {:ok, pid} = Crank.Server.start_from_snapshot(snapshot)
+      Crank.Server.cast(pid, :lock)
+      Process.sleep(20)
+
+      log = Crank.Server.call(pid, :enter_log)
+      assert {:unlocked, :locked} in log
+
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "start_from_snapshot — telemetry" do
+    test "emits [:crank, :resume] on startup" do
+      ref = make_ref()
+      parent = self()
+
+      handler_id = "test-server-resume-telemetry-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:crank, :resume],
+        fn event, measurements, metadata, _ ->
+          send(parent, {ref, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      snapshot = %{module: Door, state: :unlocked, data: %{key: "default"}}
+      {:ok, pid} = Crank.Server.start_from_snapshot(snapshot)
+
+      assert_received {^ref, [:crank, :resume], %{system_time: _},
+                       %{module: Door, state: :unlocked, data: %{key: "default"}}}
+
+      :telemetry.detach(handler_id)
+      GenServer.stop(pid)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 

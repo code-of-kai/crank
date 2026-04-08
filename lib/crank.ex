@@ -480,6 +480,110 @@ defmodule Crank do
   end
 
   # ---------------------------------------------------------------------------
+  # Public API — Persistence
+  # ---------------------------------------------------------------------------
+
+  @typedoc """
+  A serializable snapshot of a machine: just the module, state, and data.
+
+  Enough to rebuild the machine with `from_snapshot/1` or `resume/3`.
+  """
+  @type snapshot :: %{
+          module: module(),
+          state: term(),
+          data: term()
+        }
+
+  @doc """
+  Capture the machine's module, state, and data as a plain map.
+
+  The returned map is a snapshot -- enough to rebuild the machine later
+  with `from_snapshot/1`. Effects and status are not included. Effects
+  are transient (each `crank/2` replaces them), and a stopped machine
+  shouldn't be resumed.
+
+  ## Examples
+
+      iex> machine = Crank.new(Crank.Examples.Door) |> Crank.crank(:unlock)
+      iex> snap = Crank.snapshot(machine)
+      iex> snap.module
+      Crank.Examples.Door
+      iex> snap.state
+      :unlocked
+
+  """
+  @spec snapshot(Machine.t()) :: snapshot()
+  def snapshot(%Machine{module: module, state: state, data: data}) do
+    %{module: module, state: state, data: data}
+  end
+
+  @doc """
+  Rebuild a machine from a snapshot. Does not call `init/1`.
+
+  Takes a map with `:module`, `:state`, and `:data` keys and returns a
+  `%Crank.Machine{}` in the running state with no effects. Emits a
+  `[:crank, :resume]` telemetry event.
+
+  `on_enter/3` does not fire -- the machine is resuming, not entering
+  a state for the first time.
+
+  Raises `ArgumentError` if the module doesn't implement the `Crank`
+  behaviour, or if the map is missing required keys.
+
+  ## Examples
+
+      iex> original = Crank.new(Crank.Examples.Door) |> Crank.crank(:unlock)
+      iex> snap = Crank.snapshot(original)
+      iex> resumed = Crank.from_snapshot(snap)
+      iex> resumed.state
+      :unlocked
+      iex> resumed.effects
+      []
+
+  """
+  @spec from_snapshot(snapshot()) :: Machine.t()
+  def from_snapshot(%{module: module, state: state, data: data}) do
+    resume(module, state, data)
+  end
+
+  def from_snapshot(other) do
+    raise ArgumentError,
+          "from_snapshot/1 expected a map with :module, :state, and :data keys, got: #{inspect(other)}"
+  end
+
+  @doc """
+  Rebuild a machine from its three components. Does not call `init/1`.
+
+  Equivalent to `from_snapshot/1` for callers that already have the
+  module, state, and data as separate values. Emits a `[:crank, :resume]`
+  telemetry event. `on_enter/3` does not fire.
+
+  Raises `ArgumentError` if the module doesn't implement the `Crank`
+  behaviour.
+
+  ## Examples
+
+      iex> machine = Crank.resume(Crank.Examples.Door, :unlocked, %{})
+      iex> machine.state
+      :unlocked
+      iex> Crank.crank(machine, :lock).state
+      :locked
+
+  """
+  @spec resume(module(), term(), term()) :: Machine.t()
+  def resume(module, state, data) do
+    validate_module!(module)
+
+    :telemetry.execute(
+      [:crank, :resume],
+      %{system_time: System.system_time()},
+      %{module: module, state: state, data: data}
+    )
+
+    %Machine{module: module, state: state, data: data, effects: [], status: :running}
+  end
+
+  # ---------------------------------------------------------------------------
   # Dispatch — prefer handle_event/4, fall back to handle/3
   # ---------------------------------------------------------------------------
 

@@ -15,14 +15,13 @@ defmodule MyApp.VendingPersistence do
     )
   end
 
-  def handle(_event, _measurements, %{module: MyApp.VendingMachine} = meta, _config) do
-    %{to: state, data: data} = meta
+  def handle(_event, _measurements, %{module: MyApp.VendingMachine, to: state, data: data}, _config) do
+    snapshot = %{module: MyApp.VendingMachine, state: state, data: data}
 
     MyApp.Repo.insert!(
       %MyApp.MachineSnapshot{
         machine_id: data.machine_id,
-        state: state,
-        data: :erlang.term_to_binary(data)
+        snapshot: :erlang.term_to_binary(snapshot)
       },
       on_conflict: :replace_all,
       conflict_target: :machine_id
@@ -33,6 +32,8 @@ defmodule MyApp.VendingPersistence do
   def handle(_event, _measurements, _meta, _config), do: :ok
 end
 ```
+
+The snapshot map — `%{module:, state:, data:}` — is exactly the shape `Crank.from_snapshot/1` and `Crank.Server.start_from_snapshot/2` accept. Write it on every transition, read it back on restart. The README's [Persistence section](../README.md#persistence) shows the restore side and compares this pattern to event sourcing and hybrid approaches.
 
 Call `MyApp.VendingPersistence.attach()` in application startup. The vending machine's `handle/3` has no idea this persistence exists. It never imports Ecto (Elixir's database library). It never calls `Repo`. The persistence adapter listens to domain events and acts on them. The database can be swapped, the schema can change, persistence can be removed entirely -- and the domain model doesn't change.
 

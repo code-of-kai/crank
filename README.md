@@ -407,6 +407,91 @@ When the compiler can check this (expected mid-2026+), unhandled state variants 
 
 Attach handlers for persistence, notifications, audit logging, PubSub -- see the [Hexagonal Architecture guide](guides/hexagonal-architecture.md) for patterns.
 
+## Persistence
+
+`%Crank.Machine{}` is a plain immutable struct. Persisting it is writing a map; restoring it is reading one. There are three common strategies, and Crank supports all of them with the same small set of primitives.
+
+| | Snapshot-per-transition | Event log | Hybrid |
+|---|---|---|---|
+| Storage size | Smallest | Largest | Medium |
+| Restore speed | Fastest | Slowest (replay everything) | Fast |
+| Audit trail | None | Complete | Complete |
+| Time travel | No | Yes | Yes |
+| Implementation complexity | Low | Medium | Higher |
+
+### Snapshot-per-transition
+
+Write the latest state and data after every transition. On restore, read the latest row.
+
+**Writing** -- attach a telemetry handler that snapshots the machine data from the transition event:
+
+```elixir
+:telemetry.attach(
+  "snapshot-writer",
+  [:crank, :transition],
+  fn _event, _measurements, %{module: mod, to: state, data: data}, _config ->
+    MyApp.Repo.upsert_snapshot(%{module: mod, state: state, data: data})
+  end,
+  nil
+)
+```
+
+**Restoring** -- load the row and hand it to `from_snapshot/1` (pure) or `start_from_snapshot/2` (supervised):
+
+```elixir
+snapshot = MyApp.Repo.load_snapshot(order_id)
+
+# Pure mode -- no process
+machine = Crank.from_snapshot(snapshot)
+
+# Supervised process -- resumes without calling init/1
+{:ok, pid} = Crank.Server.start_from_snapshot(snapshot)
+```
+
+Resumed machines do not fire `on_enter/3`. The machine is resuming, not entering a state for the first time.
+
+Use this when you only need the current state, not the history.
+
+### Event sourcing
+
+Write every event to an append-only log. On restore, replay the events through `Crank.crank/2` to rebuild the machine.
+
+**Writing** -- attach a telemetry handler that appends the event to a log:
+
+```elixir
+:telemetry.attach(
+  "event-log-writer",
+  [:crank, :transition],
+  fn _event, _measurements, %{module: mod, event: event}, _config ->
+    MyApp.Repo.append_event(%{module: mod, event: event, at: DateTime.utc_now()})
+  end,
+  nil
+)
+```
+
+**Restoring** -- load the events and fold them through `Crank.crank/2`:
+
+```elixir
+events = MyApp.Repo.load_events(order_id)
+
+machine =
+  MyApp.Order
+  |> Crank.new(order_id: order_id)
+  |> (fn m -> Enum.reduce(events, m, &Crank.crank(&2, &1)) end).()
+```
+
+Replay starts from whatever `init/1` returns. If `init/1` has side effects, they fire on every replay.
+
+Use this when audit or time travel matters, or when you want to derive new projections from history later.
+
+### Hybrid
+
+Write both -- snapshots every N events, full event log always. On restore, `Crank.from_snapshot/1` on the latest snapshot, then `Enum.reduce` the events newer than the snapshot's timestamp. Commanded and EventStoreDB use this pattern. It trades implementation complexity for fast restores on long-lived machines.
+
+### Schema migration
+
+Snapshots are raw data. If your `state` or `data` shape changes between versions, you are responsible for migrating old snapshots. Event logs degrade more gracefully, because you can replay old events through new code.
+
 ## Design principles
 
 - **Pure core, effectful shell** (sometimes called functional core, imperative shell). Domain logic is pure data transformation -- same input, same output, no side effects. Side effects live at the boundary. This is [hexagonal architecture](guides/hexagonal-architecture.md) -- the architecture makes the wrong thing impossible, not merely discouraged.

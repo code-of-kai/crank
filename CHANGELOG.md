@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-08
+
+### Added
+
+- `Crank.snapshot/1` — captures a machine's module, state, and data as a plain map, ready to serialize and persist.
+- `Crank.from_snapshot/1` — rebuilds a machine from a snapshot map without calling `init/1`.
+- `Crank.resume/3` — same as `from_snapshot/1` with positional arguments (`module`, `state`, `data`).
+- `Crank.Server.start_from_snapshot/2` and `start_from_snapshot/4` — start a supervised `gen_statem` process from a snapshot without calling `module.init/1`.
+- `[:crank, :resume]` telemetry event — emitted whenever a machine is restored via `from_snapshot/1`, `resume/3`, or `start_from_snapshot/2`.
+- `on_enter/3` suppression on resume — resumed machines do not fire the state-enter callback, because they are resuming, not entering a state for the first time.
+- Persistence section in the README covering all three storage strategies: snapshot-per-transition, event sourcing, and hybrid.
+- Documentation-wide Feynman-style clarity pass: every `@moduledoc`, `@doc`, and `@typedoc` rewritten for concrete-before-abstract explanations, inline jargon definitions, and shorter single-job paragraphs.
+
+### Changed
+
+- `Crank.Server.Adapter` now carries a `suppress_next_enter` flag to support the resume path.
+- Hexagonal architecture guide restructured: opens with a working persistence adapter in 20 lines, then explains the pattern.
+- README restructured: show working code first, explain after, convince third, reference last.
+
 ## [0.2.0] - 2026-04-07
 
 ### Added

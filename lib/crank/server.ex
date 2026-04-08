@@ -101,6 +101,50 @@ defmodule Crank.Server do
   def call(server, event, timeout \\ 5000) do
     :gen_statem.call(server, event, timeout)
   end
+
+  @doc """
+  Starts a supervised process from a snapshot. Does not call `module.init/1`.
+
+  Takes a snapshot map (produced by `Crank.snapshot/1`) and starts a
+  `gen_statem` process with the snapshotted state and data. `on_enter/3`
+  does not fire on startup -- the machine is resuming.
+
+  Pass `:name` in `opts` to register the process. All other options are
+  forwarded to `:gen_statem.start_link/3`.
+
+  ## Examples
+
+      machine = Crank.new(MyApp.Order) |> Crank.crank(:pay)
+      snapshot = Crank.snapshot(machine)
+      {:ok, pid} = Crank.Server.start_from_snapshot(snapshot)
+
+  """
+  @spec start_from_snapshot(Crank.snapshot(), keyword()) :: on_start()
+  def start_from_snapshot(%{module: module, state: state, data: data}, opts) do
+    start_from_snapshot(module, state, data, opts)
+  end
+
+  def start_from_snapshot(snapshot) when is_map(snapshot) do
+    start_from_snapshot(snapshot, [])
+  end
+
+  @doc """
+  Starts a supervised process from a module, state, and data.
+
+  Same as `start_from_snapshot/2` but takes the three values as positional
+  arguments instead of a map.
+  """
+  @spec start_from_snapshot(module(), term(), term(), keyword()) :: on_start()
+  def start_from_snapshot(module, state, data, opts \\ []) when is_atom(module) do
+    {name, gen_opts} = Keyword.pop(opts, :name)
+    init_arg = {:resume, module, state, data}
+
+    if name do
+      :gen_statem.start_link({:local, name}, Crank.Server.Adapter, init_arg, gen_opts)
+    else
+      :gen_statem.start_link(Crank.Server.Adapter, init_arg, gen_opts)
+    end
+  end
 end
 
 defmodule Crank.Server.Adapter do
@@ -109,17 +153,36 @@ defmodule Crank.Server.Adapter do
 
   @type t :: %__MODULE__{
           module: module(),
-          data: term()
+          data: term(),
+          suppress_next_enter: boolean()
         }
 
   @enforce_keys [:module, :data]
-  defstruct [:module, :data]
+  defstruct [:module, :data, suppress_next_enter: false]
 
   @impl :gen_statem
   def callback_mode, do: [:handle_event_function, :state_enter]
 
   @impl :gen_statem
-  @spec init({module(), term()}) :: {:ok, term(), t()} | {:stop, term()}
+  @spec init({module(), term()} | {:resume, module(), term(), term()}) ::
+          {:ok, term(), t()} | {:stop, term()}
+  def init({:resume, module, state, data}) do
+    Code.ensure_loaded(module)
+
+    unless function_exported?(module, :handle_event, 4) or
+             function_exported?(module, :handle, 3) do
+      {:stop, {:bad_module, module}}
+    else
+      :telemetry.execute(
+        [:crank, :resume],
+        %{system_time: System.system_time()},
+        %{module: module, state: state, data: data}
+      )
+
+      {:ok, state, %__MODULE__{module: module, data: data, suppress_next_enter: true}}
+    end
+  end
+
   def init({module, args}) do
     Code.ensure_loaded(module)
 
@@ -138,6 +201,11 @@ defmodule Crank.Server.Adapter do
   end
 
   @impl :gen_statem
+  # Resume path — skip the initial :enter callback, clear the flag
+  def handle_event(:enter, _old_state, _new_state, %__MODULE__{suppress_next_enter: true} = internal) do
+    {:keep_state, %{internal | suppress_next_enter: false}}
+  end
+
   # State enter events — delegate to on_enter/3 if defined
   def handle_event(:enter, old_state, new_state, %__MODULE__{module: module, data: data} = internal) do
     if function_exported?(module, :on_enter, 3) do

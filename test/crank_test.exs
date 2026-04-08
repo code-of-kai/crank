@@ -357,4 +357,151 @@ defmodule Crank.PureTest do
       assert_raise Crank.StoppedError, fn -> Crank.crank!(m, :cancel) end
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Persistence — snapshot, from_snapshot, resume
+  # ---------------------------------------------------------------------------
+
+  describe "snapshot/1" do
+    test "returns a map with module, state, and data" do
+      m = Crank.new(Door) |> Crank.crank(:unlock)
+      snap = Crank.snapshot(m)
+
+      assert snap == %{module: Door, state: :unlocked, data: %{}}
+    end
+
+    test "captures data accumulated across multiple cranks" do
+      m =
+        Crank.new(Order, order_id: 42, amount: 100)
+        |> Crank.crank(:pay)
+
+      snap = Crank.snapshot(m)
+      assert snap.state == :paid
+      assert snap.data.order_id == 42
+      assert snap.data.paid_at == :now
+    end
+
+    test "does not include effects or status" do
+      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:pay) |> Crank.crank(:ship)
+      assert m.effects == [{:state_timeout, 86_400_000, :delivery_timeout}]
+
+      snap = Crank.snapshot(m)
+      refute Map.has_key?(snap, :effects)
+      refute Map.has_key?(snap, :status)
+    end
+  end
+
+  describe "from_snapshot/1" do
+    test "round-trips through snapshot and back" do
+      original = Crank.new(Door) |> Crank.crank(:unlock)
+      resumed = original |> Crank.snapshot() |> Crank.from_snapshot()
+
+      assert resumed.module == original.module
+      assert resumed.state == original.state
+      assert resumed.data == original.data
+    end
+
+    test "resumed machine accepts further events" do
+      snap =
+        Crank.new(Door)
+        |> Crank.crank(:unlock)
+        |> Crank.snapshot()
+
+      resumed = Crank.from_snapshot(snap) |> Crank.crank(:lock)
+      assert resumed.state == :locked
+    end
+
+    test "clears effects on resume" do
+      m =
+        Crank.new(Order, order_id: 1, amount: 50)
+        |> Crank.crank(:pay)
+        |> Crank.crank(:ship)
+
+      assert m.effects != []
+
+      resumed = m |> Crank.snapshot() |> Crank.from_snapshot()
+      assert resumed.effects == []
+    end
+
+    test "starts in :running status" do
+      snap = Crank.new(Door) |> Crank.snapshot()
+      resumed = Crank.from_snapshot(snap)
+      assert resumed.status == :running
+    end
+
+    test "emits [:crank, :resume] telemetry" do
+      ref = make_ref()
+      parent = self()
+
+      handler_id = "test-from-snapshot-telemetry-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler_id,
+        [:crank, :resume],
+        fn event, measurements, metadata, _ ->
+          send(parent, {ref, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      snap = Crank.new(Door) |> Crank.crank(:unlock) |> Crank.snapshot()
+      Crank.from_snapshot(snap)
+
+      assert_received {^ref, [:crank, :resume], %{system_time: _},
+                       %{module: Door, state: :unlocked, data: %{}}}
+
+      :telemetry.detach(handler_id)
+    end
+
+    test "does not call on_enter/3" do
+      # WithEnter has on_enter/3 that writes to data.entered.
+      # If we resume, on_enter should NOT fire, so data.entered stays at nil.
+      snap = %{module: WithEnter, state: :b, data: %{some: :data}}
+      resumed = Crank.from_snapshot(snap)
+
+      refute Map.has_key?(resumed.data, :entered)
+    end
+
+    test "raises ArgumentError when module is not a Crank module" do
+      assert_raise ArgumentError, ~r/does not implement the Crank behaviour/, fn ->
+        Crank.from_snapshot(%{module: String, state: :foo, data: %{}})
+      end
+    end
+
+    test "raises ArgumentError when snapshot is missing keys" do
+      assert_raise ArgumentError, ~r/expected a map with :module, :state, and :data/, fn ->
+        Crank.from_snapshot(%{module: Door, state: :locked})
+      end
+    end
+
+    test "raises ArgumentError when passed a non-map" do
+      assert_raise ArgumentError, ~r/expected a map/, fn ->
+        Crank.from_snapshot(:not_a_map)
+      end
+    end
+  end
+
+  describe "resume/3" do
+    test "produces the same machine as from_snapshot/1" do
+      via_positional = Crank.resume(Door, :unlocked, %{})
+      via_map = Crank.from_snapshot(%{module: Door, state: :unlocked, data: %{}})
+
+      assert via_positional.module == via_map.module
+      assert via_positional.state == via_map.state
+      assert via_positional.data == via_map.data
+      assert via_positional.effects == via_map.effects
+      assert via_positional.status == via_map.status
+    end
+
+    test "resumed machine can be cranked further" do
+      m = Crank.resume(Door, :unlocked, %{}) |> Crank.crank(:open)
+      assert m.state == :opened
+    end
+
+    test "raises ArgumentError when module is not a Crank module" do
+      assert_raise ArgumentError, ~r/does not implement the Crank behaviour/, fn ->
+        Crank.resume(String, :foo, %{})
+      end
+    end
+  end
 end
