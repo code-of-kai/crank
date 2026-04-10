@@ -33,7 +33,7 @@ defmodule MyApp.VendingPersistence do
 end
 ```
 
-The snapshot map — `%{module:, state:, data:}` — is exactly the shape `Crank.from_snapshot/1` and `Crank.Server.start_from_snapshot/2` accept. Write it on every transition, read it back on restart. The README's [Persistence section](../README.md#persistence) shows the restore side and compares this pattern to event sourcing and hybrid approaches.
+The snapshot map — `%{module:, state:, data:}` — is exactly the shape `Crank.from_snapshot/1` and `Crank.Server.start_from_snapshot/2` accept. Write it on every transition, read it back on restart. The README's [Persistence section](https://github.com/code-of-kai/crank#persistence) shows the restore side and compares this pattern to event sourcing and hybrid approaches.
 
 Call `MyApp.VendingPersistence.attach()` in application startup. The vending machine's `handle/3` has no idea this persistence exists. It never imports Ecto (Elixir's database library). It never calls `Repo`. The persistence adapter listens to domain events and acts on them. The database can be swapped, the schema can change, persistence can be removed entirely -- and the domain model doesn't change.
 

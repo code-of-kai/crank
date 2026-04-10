@@ -37,7 +37,7 @@ A thin `gen_statem` adapter (not GenServer). It delegates all transition logic t
 - Emits `[:crank, :transition]` telemetry events
 - Integrates with supervision trees, `:sys` debugging, and hot code reloading
 
-The internal `gen_statem` implementation lives in `Crank.Server.Adapter`.
+The internal `gen_statem` implementation lives in the Server's Adapter module (not part of the public API).
 
 ## Callbacks
 
@@ -126,7 +126,7 @@ Invalid returns raise `ArgumentError` with a message identifying the callback mo
 10. **No catch-all defaults.** Unhandled events crash with `FunctionClauseError`. Silent ignoring hides bugs.
 11. **No `current_state/1`.** Use `:sys.get_state` for debugging. No extra API surface.
 12. **Telemetry in Server only.** Pure core has zero side effects, by definition.
-13. **Module validation at init.** `Crank.new/2` and `Crank.Server.Adapter.init/1` verify the module implements `handle/3` or `handle_event/4` before anything runs.
+13. **Module validation at init.** `Crank.new/2` and the Server adapter's `init/1` verify the module implements `handle/3` or `handle_event/4` before anything runs.
 
 ## How the Server passes event types
 

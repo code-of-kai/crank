@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-10
+
+### Added
+
+- `Crank.can_crank?/2` — check whether an event would be handled in the current state without attempting the transition. Returns `true` or `false`. Stopped machines always return `false`.
+
+### Fixed
+
+- Documentation warnings: removed auto-linked references to hidden internal modules, fixed broken cross-document link in the hexagonal architecture guide.
+
 ## [0.3.0] - 2026-04-08
 
 ### Added
@@ -20,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `Crank.Server.Adapter` now carries a `suppress_next_enter` flag to support the resume path.
+- The Server adapter now carries a `suppress_next_enter` flag to support the resume path.
 - Hexagonal architecture guide restructured: opens with a working persistence adapter in 20 lines, then explains the pattern.
 - README restructured: show working code first, explain after, convince third, reference last.
 
@@ -30,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `handle/3` callback — simplified signature that drops `event_type`. Primary callback for business logic that works in both pure and process contexts.
 - `handle_event/4` takes precedence when both callbacks are defined, enabling mixed usage with a one-line catch-all delegation.
-- Runtime dispatch in `Crank.crank/2` and `Crank.Server.Adapter` — prefers `handle_event/4` if exported, falls back to `handle/3`.
+- Runtime dispatch in `Crank.crank/2` and the Server adapter — prefers `handle_event/4` if exported, falls back to `handle/3`.
 - Validation accepts `handle/3` or `handle_event/4` (at least one required).
 - Error messages reference the correct callback name (`handle/3` vs `handle_event/4`).
 
@@ -54,14 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Crank.crank/2` and `Crank.crank!/2` — pure transition functions, pipeline-friendly
 - `Crank.new/2` — constructor with module validation
 - `Crank.Server` — thin `:gen_statem` adapter with zero extra callbacks
-- `Crank.Server.Adapter` — internal gen_statem implementation
+- Server adapter — internal gen_statem implementation
 - `Crank.StoppedError` — raised when cranking a stopped machine
 - Effects as data — actions stored in `machine.effects`, never executed in pure core
 - Telemetry — `[:crank, :transition]` events emitted by Server on every state change
 - Arity-4 `handle_event(event_type, event_content, state, data)` — same argument order as gen_statem's `handle_event_function` mode
 - Event type passthrough — Server passes gen_statem event types directly to callbacks
 - `:internal` event type for pure transitions
-- Module validation at init (both `Crank.new/2` and `Crank.Server.Adapter.init/1`)
+- Module validation at init (both `Crank.new/2` and the Server adapter's init)
 - Invalid callback return detection with clear error messages
 - `Crank.Examples.Door` — minimal example (4 states, 4 events)
 - `Crank.Examples.Turnstile` — total example (2 states, 2 events, all combinations handled)
