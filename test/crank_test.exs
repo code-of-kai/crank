@@ -359,6 +359,50 @@ defmodule Crank.PureTest do
   end
 
   # ---------------------------------------------------------------------------
+  # can_crank?/2
+  # ---------------------------------------------------------------------------
+
+  describe "can_crank?/2" do
+    test "returns true when the event would be handled" do
+      machine = Crank.new(Door)
+      assert Crank.can_crank?(machine, :unlock)
+    end
+
+    test "returns false when no clause matches" do
+      machine = Crank.new(Door)
+      refute Crank.can_crank?(machine, :open)
+    end
+
+    test "reflects the current state" do
+      machine = Crank.new(Door) |> Crank.crank(:unlock)
+      assert Crank.can_crank?(machine, :open)
+      refute Crank.can_crank?(machine, :unlock)
+    end
+
+    test "returns false for a stopped machine" do
+      machine =
+        Crank.new(Order, order_id: "1", amount: 100)
+        |> Crank.crank(:pay)
+        |> Crank.crank(:cancel)
+
+      assert machine.status == {:stopped, :cancelled}
+      refute Crank.can_crank?(machine, :ship)
+    end
+
+    test "does not mutate the machine" do
+      machine = Crank.new(Door)
+      Crank.can_crank?(machine, :unlock)
+      assert machine.state == :locked
+    end
+
+    test "respects current state" do
+      machine = Crank.new(Order, order_id: "1", amount: 100) |> Crank.crank(:pay)
+      assert Crank.can_crank?(machine, :ship)
+      refute Crank.can_crank?(machine, :nonsense)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Persistence — snapshot, from_snapshot, resume
   # ---------------------------------------------------------------------------
 

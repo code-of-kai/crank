@@ -479,6 +479,39 @@ defmodule Crank do
     end
   end
 
+  @doc """
+  Check whether the machine's `handle/3` (or `handle_event/4`) has a
+  clause that matches this event in the current state.
+
+  Returns `true` if the event would be handled, `false` if it would
+  raise `FunctionClauseError`. The callback is called but the result
+  is discarded — no state change, no effects, no side effects (the
+  callbacks are pure).
+
+  Useful for UIs, API endpoints, and authorization layers that need
+  to know "should I show this button?" without attempting the transition.
+
+  A stopped machine always returns `false`.
+
+  ## Examples
+
+      iex> machine = Crank.new(Crank.Examples.Door)
+      iex> Crank.can_crank?(machine, :unlock)
+      true
+      iex> Crank.can_crank?(machine, :open)
+      false
+
+  """
+  @spec can_crank?(Machine.t(), event_content :: term()) :: boolean()
+  def can_crank?(%Machine{status: {:stopped, _}}, _event), do: false
+
+  def can_crank?(%Machine{module: module, state: state, data: data}, event) do
+    dispatch_event(module, event, state, data)
+    true
+  rescue
+    FunctionClauseError -> false
+  end
+
   # ---------------------------------------------------------------------------
   # Public API — Persistence
   # ---------------------------------------------------------------------------
