@@ -195,6 +195,18 @@ end
 
 `{:stop, reason, data}` sets `machine.status` to `{:stopped, reason}`. Further cranks raise `Crank.StoppedError`. Use `crank!/2` in tests to raise immediately on stop results.
 
+### Querying before cranking
+
+`Crank.can_crank?/2` checks whether the machine's callback has a clause that matches this event in the current state. It calls the callback and discards the result -- no state change, no effects. Stopped machines return `false`.
+
+```elixir
+machine = Crank.new(MyApp.VendingMachine, price: 75)
+Crank.can_crank?(machine, {:coin, 25})  #=> true
+Crank.can_crank?(machine, :dispense)     #=> false
+```
+
+Useful for UIs ("should I show this button?"), API endpoints ("should I accept this request?"), and authorization layers.
+
 ### Unhandled events
 
 No catch-all. Unhandled events crash with `FunctionClauseError`. This is deliberate -- a state machine that silently ignores events is hiding bugs. Let it crash; let the supervisor handle it.
