@@ -1,4 +1,4 @@
-# Composing Commands with Wants and Turns
+# Composing Work
 
 A single machine, advanced by a single event, is the atom. Real systems want two things the atom doesn't give you directly:
 
@@ -244,6 +244,8 @@ Crank.Turns.append(payment_phase, fulfillment_phase)
 Name overlaps raise at composition time — the same discipline as `turn/4`'s duplicate-name check. Fail at build, not at apply.
 
 ## Not a saga
+
+**Sagas are units of workflow; Turns are units of command.**
 
 Both `Crank.Turns` and `{:next, event}` wants are synchronous and bounded. They express a *command* — one caller intent advancing machines now. A *saga* is a workflow unfolding over real time, possibly days, with compensation if intermediate steps fail.
 

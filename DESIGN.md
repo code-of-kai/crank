@@ -61,7 +61,7 @@ Three supplementary modules sit above Layers 1 and 2. They are entirely optional
 
 The pure/process split is symmetric with Layer 1/2: the descriptor is pure data that either executor can consume. Build once; inspect in tests; run pure or supervised.
 
-None of these provide atomicity across machines. `Crank.Turns` is not a transaction. If step 2 stops after step 1 succeeded, step 1's advance stands. Compensation belongs in a saga — a separate Crank module that observes results and emits compensating commands. See the [Composing Commands guide](guides/composing-commands.md) for the full treatment.
+None of these provide atomicity across machines. `Crank.Turns` is not a transaction. If step 2 stops after step 1 succeeded, step 1's advance stands. Compensation belongs in a saga — a separate Crank module that observes results and emits compensating commands. See the [Composing Work guide](guides/composing-work.md) for the full treatment.
 
 ## Callbacks
 

@@ -262,9 +262,9 @@ end
 
 Two machines. One test. No processes, no mailboxes, no `start_link`, no sleeping, no `eventually` helpers.
 
-## Composing commands
+## Composing work
 
-Three supplementary modules ship with Crank for composing effects and multi-machine commands:
+Three supplementary modules ship with Crank for composing effects and multi-machine work:
 
 - **`Crank.Wants`** — a pipe-friendly builder over the want vocabulary. Compose shared effect policies once, reuse them across machines. Produces plain lists; zero wire-format change.
 - **`Crank.Turns`** — an `Ecto.Multi` analogue for state machines. A pure descriptor that accumulates named turns against named machines, with function-resolved step dependencies. Best-effort sequential semantics, structured error shape.
@@ -284,7 +284,7 @@ Crank.Turns.new()
 #=> {:ok, %{order: %Crank{...}, payment: %Crank{...}}}
 ```
 
-The full guide — including failure shapes, pure/process symmetry, the builder surface, and the saga-vs-Turns distinction — is in the [Composing Commands guide](guides/composing-commands.md).
+The full guide — including failure shapes, pure/process symmetry, the builder surface, and the saga-vs-Turns distinction — is in the [Composing Work guide](guides/composing-work.md).
 
 ## Authorization
 
@@ -318,7 +318,7 @@ end
 ## Documentation
 
 - [DESIGN.md](DESIGN.md) — Full specification and design rationale.
-- [Composing Commands guide](guides/composing-commands.md) — `Crank.Wants`, `Crank.Turns`, multi-machine commands.
+- [Composing Work guide](guides/composing-work.md) — `Crank.Wants`, `Crank.Turns`, multi-machine work.
 - [Hexagonal Architecture guide](guides/hexagonal-architecture.md) — Persistence, notifications, audit logging.
 - [CHANGELOG.md](CHANGELOG.md) — Version history.
 

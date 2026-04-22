@@ -57,7 +57,7 @@ defmodule Crank.MixProject do
       logo: "assets/logo.jpg",
       source_ref: "v#{@version}",
       extras: [
-        "guides/composing-commands.md",
+        "guides/composing-work.md",
         "guides/hexagonal-architecture.md",
         "CHANGELOG.md",
         "DESIGN.md"
