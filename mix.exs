@@ -56,7 +56,12 @@ defmodule Crank.MixProject do
       main: "Crank",
       logo: "assets/logo.jpg",
       source_ref: "v#{@version}",
-      extras: ["guides/hexagonal-architecture.md", "CHANGELOG.md", "DESIGN.md"],
+      extras: [
+        "guides/composing-commands.md",
+        "guides/hexagonal-architecture.md",
+        "CHANGELOG.md",
+        "DESIGN.md"
+      ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/
       ]

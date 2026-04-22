@@ -38,7 +38,7 @@ Works without any process. The `%Crank{}` struct carries five fields:
 
 Wants are never executed in the pure core. They are carried as data for the Server (or other interpreter) to act on.
 
-Each `turn/2` call on a state change replaces `wants` with the new state's declarations. Staying in place clears `wants` to an empty list.
+`machine.wants` is a materialised cache of the `wants/2` callback. The invariant `machine.wants == module.wants(machine.state, machine.memory)` holds after `new/2`, after every `turn/2` (regardless of whether it returns `:next`, `:stay`, or `:stop`), and after `resume/1`. See Design Decision 2 below.
 
 ### Layer 2: Process shell (`Crank.Server`)
 
@@ -46,10 +46,22 @@ A thin `:gen_statem` adapter. It delegates all transition logic to the pure call
 
 - Executes wants (timeouts, sends, telemetry, internal events).
 - Auto-replies to synchronous calls with `reading(state, memory)`.
-- Emits `[:crank, :transition]` telemetry on every state change.
+- Emits `[:crank, :start]`, `[:crank, :resume]`, `[:crank, :transition]`, and `[:crank, :exception]` telemetry.
 - Integrates with supervision trees and `:sys` debugging.
 
 The public API is in `Crank.Server`. The `:gen_statem` callback module is `Crank.Server.Adapter` (internal).
+
+### Layer 3: Composition (`Crank.Wants`, `Crank.Turns`, `Crank.Server.Turns`)
+
+Three supplementary modules sit above Layers 1 and 2. They are entirely optional — every v1.0 machine keeps working without them — but they address two composition shapes the atoms don't provide directly:
+
+- **`Crank.Wants`** — a pipe-friendly builder over the want vocabulary. Produces plain `[want()]` lists identical to hand-written tuple literals. Enables shared effect policies to be extracted into reusable helpers rather than hand-copied across every machine's `wants/2` clause.
+- **`Crank.Turns`** — a descriptor struct that accumulates named turns against named machines, with function-resolved step dependencies on prior results. `Crank.Turns.apply/1` executes the descriptor against `%Crank{}` structs in pure mode. Best-effort sequential semantics: runs top-to-bottom, halts on the first stop, returns `{:ok, results}` or `{:error, name, reason, advanced_so_far}`.
+- **`Crank.Server.Turns`** — the process-mode executor for the same descriptor. Walks the steps through `Crank.Server.turn/2` calls. Uses `Process.monitor/1` + bounded `receive` to detect post-reply termination (because `Process.alive?/1` is unreliable during gen_statem cleanup).
+
+The pure/process split is symmetric with Layer 1/2: the descriptor is pure data that either executor can consume. Build once; inspect in tests; run pure or supervised.
+
+None of these provide atomicity across machines. `Crank.Turns` is not a transaction. If step 2 stops after step 1 succeeded, step 1's advance stands. Compensation belongs in a saga — a separate Crank module that observes results and emits compensating commands. See the [Composing Commands guide](guides/composing-commands.md) for the full treatment.
 
 ## Callbacks
 
@@ -80,9 +92,11 @@ A list of want tuples. Each describes one effect the state declares on arrival:
 
 | Want | Meaning |
 |---|---|
-| `{:after, ms, event}` | State timeout — fires `event` after `ms` if the state hasn't changed. |
-| `{:next, event}` | Enqueue an internal event to be handled after the current transition commits. |
-| `{:send, dest, message}` | Send `message` to `dest` (pid or registered name). |
+| `{:after, ms, event}` | Anonymous state timeout. One per state; auto-cancels on state-value change. |
+| `{:after, name, ms, event}` | Named generic timeout. Multiple may run concurrently. Not auto-cancelled on state change. |
+| `{:cancel, name}` | Cancel a named timeout. No-op if no such timer runs. |
+| `{:next, event}` | Enqueue an internal event to be handled before any queued external event. |
+| `{:send, dest, message}` | Send `message` to `dest` (pid, registered name, or `{name, node}`). Fire-and-forget. |
 | `{:telemetry, name, measurements, metadata}` | Emit a telemetry event. |
 
 The pure core stores these as data in `machine.wants`. `Crank.Server` interprets them.

@@ -107,10 +107,10 @@ After each `turn/2`, the returned `%Crank{}` has five fields:
 - `module` — the callback module.
 - `state` — the current state.
 - `memory` — data carried across states.
-- `wants` — declarations from the last state entry, stored as inert data.
+- `wants` — what the current state declares, stored as inert data.
 - `engine` — `:running` or `{:off, reason}`.
 
-`wants` is populated on `{:next, ...}` transitions. It holds what the state has declared should happen on arrival, as data. `Crank.Server` interprets that data; the pure core does not.
+`machine.wants` is a materialised cache of the `wants/2` callback. The library guarantees the invariant `machine.wants == module.wants(machine.state, machine.memory)` after `new/2`, after every `turn/2` (regardless of `:next`, `:stay`, or `:stop`), and after `resume/1`. The pure core never executes wants; `Crank.Server` interprets the declared list on every `{:next, ...}` arrival.
 
 ## Return values from `turn/3`
 
@@ -129,9 +129,11 @@ No action tuples. No effects. `turn/3` is pure state computation; this is the st
 
 | Want | Effect |
 |---|---|
-| `{:after, ms, event}` | Fire `event` after `ms` milliseconds if the state hasn't changed. |
-| `{:next, event}` | Enqueue `event` as an internal event to handle after this transition. |
-| `{:send, dest, message}` | Send `message` to `dest` (pid or registered name). |
+| `{:after, ms, event}` | Anonymous state timeout. Fire `event` after `ms` if the state hasn't changed. One per state; auto-cancels on state-value change. |
+| `{:after, name, ms, event}` | Named generic timeout. Multiple may run concurrently. Cancelled explicitly with `{:cancel, name}`. |
+| `{:cancel, name}` | Cancel a named timeout. No-op if no such timer runs. |
+| `{:next, event}` | Inject an internal event, processed before any queued external event. |
+| `{:send, dest, message}` | Send `message` to `dest` (pid, registered name, or `{name, node}`). Fire-and-forget. |
 | `{:telemetry, name, measurements, metadata}` | Emit a telemetry event. |
 
 ## Moore, not Mealy
@@ -203,11 +205,12 @@ State-specific data lives in the struct. Cross-cutting concerns live in `memory`
 
 ## Telemetry
 
-`Crank.Server` emits three events automatically:
+`Crank.Server` emits four events automatically:
 
 - **`[:crank, :start]`** when a fresh machine boots, with `%{module, state, memory}`.
 - **`[:crank, :resume]`** when a machine is restored from a snapshot, with `%{module, state, memory}`.
 - **`[:crank, :transition]`** on every state change, with `%{module, from, to, event, memory}`.
+- **`[:crank, :exception]`** when `turn/3` raises, throws, or exits, with `%{module, state, event, memory, kind, reason, stacktrace}`. Emitted before the error re-raises and terminates the process.
 
 Wants can also emit user-defined telemetry via `{:telemetry, name, measurements, metadata}`.
 
@@ -227,7 +230,7 @@ machine = Crank.resume(snapshot)
 {:ok, pid} = Crank.Server.resume(snapshot)
 ```
 
-Snapshots are plain maps — portable across serialization boundaries. Pure `resume/1` does not refire `wants/2`; the machine is recalling a moment in time. `Crank.Server.resume/2` *does* refire `wants/2`, because the fresh process needs to re-arm the state's timers. Both emit `[:crank, :resume]` telemetry.
+Snapshots are plain maps — portable across serialization boundaries. Pure `resume/1` populates the `wants` cache per the invariant but executes nothing. `Crank.Server.resume/2` additionally re-executes wants, re-arming timers and re-emitting sends; recipients should be idempotent or the effect belongs in a saga with durable delivery state. Both emit `[:crank, :resume]` telemetry.
 
 Event-sourcing works the same as snapshot-per-transition: attach a telemetry handler to `[:crank, :transition]`, write the event, and fold events through `Crank.turn/2` on restore.
 
@@ -258,6 +261,30 @@ end
 ```
 
 Two machines. One test. No processes, no mailboxes, no `start_link`, no sleeping, no `eventually` helpers.
+
+## Composing commands
+
+Three supplementary modules ship with Crank for composing effects and multi-machine commands:
+
+- **`Crank.Wants`** — a pipe-friendly builder over the want vocabulary. Compose shared effect policies once, reuse them across machines. Produces plain lists; zero wire-format change.
+- **`Crank.Turns`** — an `Ecto.Multi` analogue for state machines. A pure descriptor that accumulates named turns against named machines, with function-resolved step dependencies. Best-effort sequential semantics, structured error shape.
+- **`Crank.Server.Turns`** — the process-mode executor for the same descriptor. Operates on `Crank.Server` pids / registered names via monitor-based stop detection.
+
+Quick taste:
+
+```elixir
+order   = Crank.new(MyApp.Order)
+payment = Crank.new(MyApp.Payment)
+
+Crank.Turns.new()
+|> Crank.Turns.turn(:order, order, :submit)
+|> Crank.Turns.turn(:payment, payment,
+     fn %{order: o} -> {:charge, o.memory.total} end)
+|> Crank.Turns.apply()
+#=> {:ok, %{order: %Crank{...}, payment: %Crank{...}}}
+```
+
+The full guide — including failure shapes, pure/process symmetry, the builder surface, and the saga-vs-Turns distinction — is in the [Composing Commands guide](guides/composing-commands.md).
 
 ## Authorization
 
@@ -291,6 +318,7 @@ end
 ## Documentation
 
 - [DESIGN.md](DESIGN.md) — Full specification and design rationale.
+- [Composing Commands guide](guides/composing-commands.md) — `Crank.Wants`, `Crank.Turns`, multi-machine commands.
 - [Hexagonal Architecture guide](guides/hexagonal-architecture.md) — Persistence, notifications, audit logging.
 - [CHANGELOG.md](CHANGELOG.md) — Version history.
 
