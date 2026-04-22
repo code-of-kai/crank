@@ -2,319 +2,266 @@ defmodule Crank.PureTest do
   use ExUnit.Case, async: true
   doctest Crank
 
-  # ---------------------------------------------------------------------------
-  # Fixtures — one machine per return type family
-  # ---------------------------------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
+  # Fixtures — one module per concern
+  # ──────────────────────────────────────────────────────────────────────────
 
   defmodule Door do
     use Crank
 
     @impl true
-    def init(_opts), do: {:ok, :locked, %{}}
+    def start(_opts), do: {:ok, :locked, %{}}
 
     @impl true
-    def handle_event(_, :unlock, :locked, data), do: {:next_state, :unlocked, data}
-    def handle_event(_, :lock, :unlocked, data), do: {:next_state, :locked, data}
-    def handle_event(_, :open, :unlocked, data), do: {:next_state, :opened, data}
-    def handle_event(_, :close, :opened, data), do: {:next_state, :unlocked, data}
+    def turn(:unlock, :locked, m), do: {:next, :unlocked, m}
+    def turn(:lock, :unlocked, m), do: {:next, :locked, m}
+    def turn(:open, :unlocked, m), do: {:next, :opened, m}
+    def turn(:close, :opened, m), do: {:next, :unlocked, m}
   end
 
   defmodule Order do
     use Crank
 
     @impl true
-    def init(opts) do
-      {:ok, :pending, %{order_id: opts[:order_id], amount: opts[:amount]}}
-    end
+    def start(opts), do: {:ok, :pending, %{order_id: opts[:order_id], amount: opts[:amount]}}
 
     @impl true
-    def handle_event(_, :pay, :pending, data) do
-      {:next_state, :paid, Map.put(data, :paid_at, :now)}
-    end
+    def turn(:pay, :pending, m), do: {:next, :paid, Map.put(m, :paid_at, :now)}
+    def turn(:ship, :paid, m), do: {:next, :shipped, m}
+    def turn(:cancel, :paid, m), do: {:stop, :cancelled, Map.put(m, :cancelled_at, :now)}
+    def turn(:note, _s, m), do: {:stay, Map.update(m, :notes, 1, &(&1 + 1))}
+    def turn(:noop, _s, _m), do: :stay
 
-    def handle_event(_, :ship, :paid, data) do
-      {:next_state, :shipped, data, [{:state_timeout, 86_400_000, :delivery_timeout}]}
-    end
-
-    def handle_event(_, :cancel, :paid, data) do
-      {:stop, :cancelled, Map.put(data, :cancelled_at, :now)}
-    end
-
-    def handle_event(_, :keep, _state, data), do: {:keep_state, data}
-
-    def handle_event(_, :keep_with_actions, _state, data) do
-      {:keep_state, data, [{:state_timeout, 1000, :nudge}]}
-    end
-
-    def handle_event(_, :noop, _state, _data), do: :keep_state_and_data
-
-    def handle_event(_, :noop_with_actions, _state, _data) do
-      {:keep_state_and_data, [{:state_timeout, 2000, :nag}]}
-    end
+    @impl true
+    def wants(:shipped, _m), do: [{:after, 86_400_000, :delivery_timeout}]
+    def wants(_s, _m), do: []
   end
 
-  defmodule WithEnter do
+  defmodule Counter do
+    @moduledoc false
     use Crank
 
     @impl true
-    def init(_opts), do: {:ok, :a, %{}}
+    def start(_opts), do: {:ok, :idle, %{count: 0}}
 
     @impl true
-    def handle_event(_, :go, :a, data), do: {:next_state, :b, data}
+    def turn(:tick, :idle, m), do: {:stay, %{m | count: m.count + 1}}
+    def turn(:double, :idle, m), do: {:stay, %{m | count: m.count * 2}}
 
     @impl true
-    def on_enter(old, new, data) do
-      {:keep_state, Map.put(data, :entered, {old, new})}
-    end
+    def reading(state, m), do: %{state: state, count: m.count}
   end
 
-  defmodule WithEnterActions do
-    use Crank
+  # ──────────────────────────────────────────────────────────────────────────
+  # turn/2 — return shapes
+  # ──────────────────────────────────────────────────────────────────────────
 
-    @impl true
-    def init(_opts), do: {:ok, :a, %{}}
-
-    @impl true
-    def handle_event(_, :go, :a, data) do
-      {:next_state, :b, data, [{:state_timeout, 5000, :from_handle}]}
-    end
-
-    @impl true
-    def on_enter(_old, :b, data) do
-      {:keep_state, data, [{:state_timeout, 3000, :from_enter}]}
-    end
-
-    def on_enter(_old, _new, data), do: {:keep_state, data}
-  end
-
-  # ---------------------------------------------------------------------------
-  # handle/3 — simplified callback (vending machine)
-  # ---------------------------------------------------------------------------
-
-  defmodule VendingMachine do
-    use Crank
-
-    @impl true
-    def init(_opts), do: {:ok, :idle, %{balance: 0}}
-
-    @impl true
-    def handle(:insert, :idle, data) do
-      {:next_state, :ready, %{data | balance: data.balance + 100}}
-    end
-
-    def handle(:select, :ready, data) do
-      {:next_state, :vending, data, [{:state_timeout, 5000, :vend_timeout}]}
-    end
-
-    def handle(:dispense, :vending, data) do
-      {:next_state, :idle, %{data | balance: 0}}
-    end
-
-    def handle(:refund, :ready, data) do
-      {:stop, :refunded, %{data | balance: 0}}
-    end
-
-    def handle(:check, _state, data), do: {:keep_state, data}
-    def handle(:noop, _state, _data), do: :keep_state_and_data
-
-    def handle(:check_with_actions, _state, data) do
-      {:keep_state, data, [{:state_timeout, 1000, :nudge}]}
-    end
-
-    def handle(:noop_with_actions, _state, _data) do
-      {:keep_state_and_data, [{:state_timeout, 2000, :nag}]}
-    end
-  end
-
-  defmodule VendingWithEnter do
-    use Crank
-
-    @impl true
-    def init(_opts), do: {:ok, :idle, %{entered: nil}}
-
-    @impl true
-    def handle(:insert, :idle, data), do: {:next_state, :ready, data}
-
-    @impl true
-    def on_enter(old, new, data) do
-      {:keep_state, %{data | entered: {old, new}}}
-    end
-  end
-
-  describe "handle/3" do
-    test "basic transitions" do
-      m =
-        VendingMachine
-        |> Crank.new()
-        |> Crank.crank(:insert)
-        |> Crank.crank(:select)
-
-      assert m.state == :vending
-      assert m.data.balance == 100
-    end
-
-    test "{:next_state, state, data}" do
-      m = Crank.new(VendingMachine) |> Crank.crank(:insert)
-      assert m.state == :ready
-      assert m.effects == []
-    end
-
-    test "{:next_state, state, data, actions}" do
-      m = Crank.new(VendingMachine) |> Crank.crank(:insert) |> Crank.crank(:select)
-      assert m.state == :vending
-      assert m.effects == [{:state_timeout, 5000, :vend_timeout}]
-    end
-
-    test "{:keep_state, data}" do
-      m = Crank.new(VendingMachine) |> Crank.crank(:check)
-      assert m.state == :idle
-    end
-
-    test "{:keep_state, data, actions}" do
-      m = Crank.new(VendingMachine) |> Crank.crank(:check_with_actions)
-      assert m.effects == [{:state_timeout, 1000, :nudge}]
-    end
-
-    test ":keep_state_and_data" do
-      m = Crank.new(VendingMachine) |> Crank.crank(:noop)
-      assert m.state == :idle
-    end
-
-    test "{:keep_state_and_data, actions}" do
-      m = Crank.new(VendingMachine) |> Crank.crank(:noop_with_actions)
-      assert m.effects == [{:state_timeout, 2000, :nag}]
-    end
-
-    test "{:stop, reason, data}" do
-      m = Crank.new(VendingMachine) |> Crank.crank(:insert) |> Crank.crank(:refund)
-      assert m.status == {:stopped, :refunded}
-      assert m.data.balance == 0
-    end
-
-    test "composes with on_enter/3" do
-      m = Crank.new(VendingWithEnter) |> Crank.crank(:insert)
-      assert m.data.entered == {:idle, :ready}
-    end
-
-    test "handle_event/4 takes precedence when both exist" do
-      defmodule BothCallbacks do
-        use Crank
-
-        @impl true
-        def init(_), do: {:ok, :a, %{}}
-
-        @impl true
-        def handle_event(_, :go, :a, data), do: {:next_state, :b_from_event, data}
-
-        @impl true
-        def handle(:go, :a, data), do: {:next_state, :b_from_handle, data}
-      end
-
-      m = Crank.new(BothCallbacks) |> Crank.crank(:go)
-      assert m.state == :b_from_event
-    end
-
-    test "module with neither callback raises" do
-      defmodule NoCallbacks do
-        def init(_), do: {:ok, :a, %{}}
-      end
-
-      assert_raise ArgumentError, ~r/handle_event\/4 or handle\/3/, fn ->
-        Crank.new(NoCallbacks)
-      end
-    end
-
-    test "invalid return references handle/3 in error" do
-      defmodule BadHandleReturn do
-        use Crank
-
-        @impl true
-        def init(_), do: {:ok, :idle, %{}}
-
-        @impl true
-        def handle(:go, :idle, _data), do: :oops
-      end
-
-      assert_raise ArgumentError, ~r/handle\/3.*returned invalid result/, fn ->
-        Crank.new(BadHandleReturn) |> Crank.crank(:go)
-      end
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Return types — one test per variant (exhaustive)
-  # ---------------------------------------------------------------------------
-
-  describe "return types" do
-    test "{:next_state, state, data}" do
-      m = Crank.new(Door) |> Crank.crank(:unlock)
+  describe "turn/2 — return shapes" do
+    test "{:next, state, memory}" do
+      m = Door |> Crank.new() |> Crank.turn(:unlock)
       assert m.state == :unlocked
-      assert m.effects == []
+      assert m.memory == %{}
+      assert m.wants == []
     end
 
-    test "{:next_state, state, data, actions}" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:pay) |> Crank.crank(:ship)
+    test "{:stay, memory}" do
+      m = Order |> Crank.new(order_id: 1, amount: 50) |> Crank.turn(:note)
+      assert m.state == :pending
+      assert m.memory.notes == 1
+      assert m.wants == []
+    end
+
+    test ":stay" do
+      m = Order |> Crank.new(order_id: 1, amount: 50) |> Crank.turn(:noop)
+      assert m.state == :pending
+      assert m.wants == []
+    end
+
+    test "{:stop, reason, memory}" do
+      m =
+        Order
+        |> Crank.new(order_id: 1, amount: 50)
+        |> Crank.turn(:pay)
+        |> Crank.turn(:cancel)
+
+      assert m.engine == {:off, :cancelled}
+      assert m.memory.cancelled_at == :now
+    end
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # wants/2 — always reflects module.wants(state, memory)
+  # ──────────────────────────────────────────────────────────────────────────
+
+  describe "wants/2" do
+    test "machine.wants equals module.wants(state, memory) after {:next, ...}" do
+      m =
+        Order
+        |> Crank.new(order_id: 1, amount: 50)
+        |> Crank.turn(:pay)
+        |> Crank.turn(:ship)
+
       assert m.state == :shipped
-      assert m.effects == [{:state_timeout, 86_400_000, :delivery_timeout}]
+      assert m.wants == Order.wants(:shipped, m.memory)
+      assert m.wants == [{:after, 86_400_000, :delivery_timeout}]
     end
 
-    test "{:keep_state, data}" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:keep)
-      assert m.state == :pending
+    test "machine.wants equals module.wants(state, memory) after {:stay, memory}" do
+      # Order has wants(:shipped, _) declared. :note on :shipped returns
+      # {:stay, new_memory} — wants should still reflect :shipped's declaration.
+      m =
+        Order
+        |> Crank.new(order_id: 1, amount: 50)
+        |> Crank.turn(:pay)
+        |> Crank.turn(:ship)
+        |> Crank.turn(:note)
+
+      assert m.state == :shipped
+      assert m.wants == Order.wants(:shipped, m.memory)
+      assert m.wants == [{:after, 86_400_000, :delivery_timeout}]
     end
 
-    test "{:keep_state, data, actions}" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:keep_with_actions)
-      assert m.effects == [{:state_timeout, 1000, :nudge}]
+    test "machine.wants equals module.wants(state, memory) after :stay" do
+      m =
+        Order
+        |> Crank.new(order_id: 1, amount: 50)
+        |> Crank.turn(:pay)
+        |> Crank.turn(:ship)
+        |> Crank.turn(:noop)
+
+      assert m.state == :shipped
+      assert m.wants == Order.wants(:shipped, m.memory)
     end
 
-    test ":keep_state_and_data" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:noop)
-      assert m.state == :pending
+    test "initial new/2 populates wants for the starting state" do
+      defmodule InitialWants do
+        use Crank
+        def start(_), do: {:ok, :armed, %{}}
+        def turn(_, _, m), do: {:stay, m}
+        def wants(:armed, _), do: [{:after, 1_000, :check}]
+        def wants(_, _), do: []
+      end
+
+      m = Crank.new(InitialWants)
+      assert m.wants == [{:after, 1_000, :check}]
     end
 
-    test "{:keep_state_and_data, actions}" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:noop_with_actions)
-      assert m.effects == [{:state_timeout, 2000, :nag}]
+    test "defaults to empty list when the callback is not defined" do
+      m = Door |> Crank.new() |> Crank.turn(:unlock)
+      assert m.wants == []
     end
 
-    test "{:stop, reason, data}" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:pay) |> Crank.crank(:cancel)
-      assert m.status == {:stopped, :cancelled}
+    test "preserved on {:stop, ...} — still matches module.wants(state, memory)" do
+      m =
+        Order
+        |> Crank.new(order_id: 1, amount: 50)
+        |> Crank.turn(:pay)
+        |> Crank.turn(:cancel)
+
+      # {:stop, reason, memory} preserves state (domain position at time of stop).
+      assert m.state == :paid
+      assert m.engine == {:off, :cancelled}
+      # Whether the engine can act is answered by `engine`; `wants` still
+      # reflects what the current (state, memory) would declare.
+      assert m.wants == Order.wants(m.state, m.memory)
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # on_enter — behaviour tests that properties can't express
-  # ---------------------------------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
+  # reading/1 — projection for observers
+  # ──────────────────────────────────────────────────────────────────────────
 
-  describe "on_enter/3" do
-    test "receives old_state and new_state" do
-      m = Crank.new(WithEnter) |> Crank.crank(:go)
-      assert m.data.entered == {:a, :b}
+  describe "reading/1" do
+    test "uses reading/2 callback when defined" do
+      m = Counter |> Crank.new() |> Crank.turn(:tick) |> Crank.turn(:tick) |> Crank.turn(:tick)
+      assert Crank.reading(m) == %{state: :idle, count: 3}
     end
 
-    test "effects from handle_event and on_enter combine in order" do
-      m = Crank.new(WithEnterActions) |> Crank.crank(:go)
-      assert m.effects == [{:state_timeout, 5000, :from_handle}, {:state_timeout, 3000, :from_enter}]
+    test "falls back to the raw state when reading/2 is not defined" do
+      m = Door |> Crank.new() |> Crank.turn(:unlock)
+      assert Crank.reading(m) == :unlocked
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # Error paths — things that must crash with good messages
-  # ---------------------------------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
+  # can_turn?/2 and can_turn!/2
+  # ──────────────────────────────────────────────────────────────────────────
+
+  describe "can_turn?/2" do
+    test "true when the event would be handled" do
+      assert Crank.can_turn?(Crank.new(Door), :unlock)
+    end
+
+    test "false when no clause matches" do
+      refute Crank.can_turn?(Crank.new(Door), :open)
+    end
+
+    test "reflects the current state" do
+      m = Crank.turn(Crank.new(Door), :unlock)
+      assert Crank.can_turn?(m, :open)
+      refute Crank.can_turn?(m, :unlock)
+    end
+
+    test "false for a stopped machine" do
+      m =
+        Order
+        |> Crank.new(order_id: 1, amount: 50)
+        |> Crank.turn(:pay)
+        |> Crank.turn(:cancel)
+
+      assert match?({:off, _}, m.engine)
+      refute Crank.can_turn?(m, :ship)
+    end
+
+    test "does not mutate the machine" do
+      m = Crank.new(Door)
+      _ = Crank.can_turn?(m, :unlock)
+      assert m.state == :locked
+    end
+  end
+
+  describe "can_turn!/2" do
+    test "returns :ok when the event would be handled" do
+      assert :ok == Crank.can_turn!(Crank.new(Door), :unlock)
+    end
+
+    test "raises FunctionClauseError when not" do
+      assert_raise FunctionClauseError, fn ->
+        Crank.can_turn!(Crank.new(Door), :open)
+      end
+    end
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # turn!/2 — bang variant
+  # ──────────────────────────────────────────────────────────────────────────
+
+  describe "turn!/2" do
+    test "returns the machine on successful transition" do
+      m = Crank.turn!(Crank.new(Door), :unlock)
+      assert m.state == :unlocked
+    end
+
+    test "raises StoppedError if the transition stops the machine" do
+      m = Crank.turn!(Crank.new(Order, order_id: 1, amount: 50), :pay)
+
+      assert_raise Crank.StoppedError, fn -> Crank.turn!(m, :cancel) end
+    end
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Error paths
+  # ──────────────────────────────────────────────────────────────────────────
 
   describe "error paths" do
-    test "init {:stop, reason} raises ArgumentError" do
-      defmodule FailInit do
+    test "start returning {:stop, reason} raises ArgumentError" do
+      defmodule FailStart do
         use Crank
-        @impl true
-        def init(_), do: {:stop, :bad_config}
-        @impl true
-        def handle_event(_, _, _, _data), do: :keep_state_and_data
+        def start(_), do: {:stop, :bad_config}
+        def turn(_, _, m), do: {:stay, m}
       end
 
-      assert_raise ArgumentError, ~r/bad_config/, fn -> Crank.new(FailInit) end
+      assert_raise ArgumentError, ~r/bad_config/, fn -> Crank.new(FailStart) end
     end
 
     test "non-Crank module raises ArgumentError" do
@@ -323,161 +270,109 @@ defmodule Crank.PureTest do
       end
     end
 
-    test "invalid callback return raises ArgumentError" do
+    test "invalid turn/3 return raises ArgumentError" do
       defmodule BadReturn do
         use Crank
-        @impl true
-        def init(_), do: {:ok, :idle, %{}}
-        @impl true
-        def handle_event(_, :go, :idle, _data), do: :oops
+        def start(_), do: {:ok, :idle, %{}}
+        def turn(:go, :idle, _m), do: :oops
       end
 
-      assert_raise ArgumentError, ~r/returned invalid result.*:oops/, fn ->
-        Crank.new(BadReturn) |> Crank.crank(:go)
+      assert_raise ArgumentError, ~r/returned invalid result/, fn ->
+        Crank.turn(Crank.new(BadReturn), :go)
       end
     end
 
-    test "unhandled event crashes with FunctionClauseError" do
+    test "unhandled event raises FunctionClauseError" do
       assert_raise FunctionClauseError, fn ->
-        Crank.new(Door) |> Crank.crank(:nonexistent)
+        Crank.turn(Crank.new(Door), :nonexistent)
       end
     end
 
-    test "crank on stopped machine raises StoppedError" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:pay) |> Crank.crank(:cancel)
+    test "turn on a stopped machine raises StoppedError" do
+      m =
+        Order
+        |> Crank.new(order_id: 1, amount: 50)
+        |> Crank.turn(:pay)
+        |> Crank.turn(:cancel)
 
-      assert_raise Crank.StoppedError, ~r/machine is stopped/, fn ->
-        Crank.crank(m, :ship)
+      assert_raise Crank.StoppedError, ~r/engine is off/, fn ->
+        Crank.turn(m, :ship)
       end
     end
-
-    test "crank! raises on stop result" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank!(:pay)
-
-      assert_raise Crank.StoppedError, fn -> Crank.crank!(m, :cancel) end
-    end
   end
 
-  # ---------------------------------------------------------------------------
-  # can_crank?/2
-  # ---------------------------------------------------------------------------
-
-  describe "can_crank?/2" do
-    test "returns true when the event would be handled" do
-      machine = Crank.new(Door)
-      assert Crank.can_crank?(machine, :unlock)
-    end
-
-    test "returns false when no clause matches" do
-      machine = Crank.new(Door)
-      refute Crank.can_crank?(machine, :open)
-    end
-
-    test "reflects the current state" do
-      machine = Crank.new(Door) |> Crank.crank(:unlock)
-      assert Crank.can_crank?(machine, :open)
-      refute Crank.can_crank?(machine, :unlock)
-    end
-
-    test "returns false for a stopped machine" do
-      machine =
-        Crank.new(Order, order_id: "1", amount: 100)
-        |> Crank.crank(:pay)
-        |> Crank.crank(:cancel)
-
-      assert machine.status == {:stopped, :cancelled}
-      refute Crank.can_crank?(machine, :ship)
-    end
-
-    test "does not mutate the machine" do
-      machine = Crank.new(Door)
-      Crank.can_crank?(machine, :unlock)
-      assert machine.state == :locked
-    end
-
-    test "respects current state" do
-      machine = Crank.new(Order, order_id: "1", amount: 100) |> Crank.crank(:pay)
-      assert Crank.can_crank?(machine, :ship)
-      refute Crank.can_crank?(machine, :nonsense)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Persistence — snapshot, from_snapshot, resume
-  # ---------------------------------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
+  # Persistence — snapshot/1 and resume/1
+  # ──────────────────────────────────────────────────────────────────────────
 
   describe "snapshot/1" do
-    test "returns a map with module, state, and data" do
-      m = Crank.new(Door) |> Crank.crank(:unlock)
-      snap = Crank.snapshot(m)
-
-      assert snap == %{module: Door, state: :unlocked, data: %{}}
+    test "returns a map of module, state, memory" do
+      m = Door |> Crank.new() |> Crank.turn(:unlock)
+      assert Crank.snapshot(m) == %{module: Door, state: :unlocked, memory: %{}}
     end
 
-    test "captures data accumulated across multiple cranks" do
-      m =
-        Crank.new(Order, order_id: 42, amount: 100)
-        |> Crank.crank(:pay)
-
+    test "captures memory accumulated across turns" do
+      m = Order |> Crank.new(order_id: 42, amount: 100) |> Crank.turn(:pay)
       snap = Crank.snapshot(m)
+
       assert snap.state == :paid
-      assert snap.data.order_id == 42
-      assert snap.data.paid_at == :now
+      assert snap.memory.order_id == 42
+      assert snap.memory.paid_at == :now
     end
 
-    test "does not include effects or status" do
-      m = Crank.new(Order, order_id: 1, amount: 50) |> Crank.crank(:pay) |> Crank.crank(:ship)
-      assert m.effects == [{:state_timeout, 86_400_000, :delivery_timeout}]
+    test "excludes wants and engine" do
+      m = Order |> Crank.new(order_id: 1, amount: 50) |> Crank.turn(:pay) |> Crank.turn(:ship)
+      assert m.wants != []
 
       snap = Crank.snapshot(m)
-      refute Map.has_key?(snap, :effects)
-      refute Map.has_key?(snap, :status)
+      refute Map.has_key?(snap, :wants)
+      refute Map.has_key?(snap, :engine)
     end
   end
 
-  describe "from_snapshot/1" do
+  describe "resume/1" do
     test "round-trips through snapshot and back" do
-      original = Crank.new(Door) |> Crank.crank(:unlock)
-      resumed = original |> Crank.snapshot() |> Crank.from_snapshot()
+      original = Door |> Crank.new() |> Crank.turn(:unlock)
+      resumed = original |> Crank.snapshot() |> Crank.resume()
 
       assert resumed.module == original.module
       assert resumed.state == original.state
-      assert resumed.data == original.data
+      assert resumed.memory == original.memory
     end
 
     test "resumed machine accepts further events" do
-      snap =
-        Crank.new(Door)
-        |> Crank.crank(:unlock)
-        |> Crank.snapshot()
-
-      resumed = Crank.from_snapshot(snap) |> Crank.crank(:lock)
-      assert resumed.state == :locked
-    end
-
-    test "clears effects on resume" do
       m =
-        Crank.new(Order, order_id: 1, amount: 50)
-        |> Crank.crank(:pay)
-        |> Crank.crank(:ship)
+        Door
+        |> Crank.new()
+        |> Crank.turn(:unlock)
+        |> Crank.snapshot()
+        |> Crank.resume()
+        |> Crank.turn(:lock)
 
-      assert m.effects != []
-
-      resumed = m |> Crank.snapshot() |> Crank.from_snapshot()
-      assert resumed.effects == []
+      assert m.state == :locked
     end
 
-    test "starts in :running status" do
-      snap = Crank.new(Door) |> Crank.snapshot()
-      resumed = Crank.from_snapshot(snap)
-      assert resumed.status == :running
+    test "populates wants cache to match module.wants(state, memory)" do
+      # Pure resume populates the cache for consistency with the
+      # "wants is always module.wants(state, memory)" invariant. It does NOT
+      # execute anything — pure mode never executes wants. Server resume is
+      # the mode that actually re-arms timers and re-delivers sends.
+      snap = %{module: Order, state: :shipped, memory: %{notes: 0}}
+      resumed = Crank.resume(snap)
+
+      assert resumed.wants == Order.wants(:shipped, %{notes: 0})
+      assert resumed.wants == [{:after, 86_400_000, :delivery_timeout}]
+    end
+
+    test "starts with engine: :running" do
+      snap = Crank.snapshot(Crank.new(Door))
+      assert Crank.resume(snap).engine == :running
     end
 
     test "emits [:crank, :resume] telemetry" do
       ref = make_ref()
       parent = self()
-
-      handler_id = "test-from-snapshot-telemetry-#{inspect(ref)}"
+      handler_id = "test-resume-#{inspect(ref)}"
 
       :telemetry.attach(
         handler_id,
@@ -488,63 +383,24 @@ defmodule Crank.PureTest do
         nil
       )
 
-      snap = Crank.new(Door) |> Crank.crank(:unlock) |> Crank.snapshot()
-      Crank.from_snapshot(snap)
+      snap = Door |> Crank.new() |> Crank.turn(:unlock) |> Crank.snapshot()
+      Crank.resume(snap)
 
       assert_received {^ref, [:crank, :resume], %{system_time: _},
-                       %{module: Door, state: :unlocked, data: %{}}}
+                       %{module: Door, state: :unlocked, memory: %{}}}
 
       :telemetry.detach(handler_id)
     end
 
-    test "does not call on_enter/3" do
-      # WithEnter has on_enter/3 that writes to data.entered.
-      # If we resume, on_enter should NOT fire, so data.entered stays at nil.
-      snap = %{module: WithEnter, state: :b, data: %{some: :data}}
-      resumed = Crank.from_snapshot(snap)
-
-      refute Map.has_key?(resumed.data, :entered)
-    end
-
     test "raises ArgumentError when module is not a Crank module" do
       assert_raise ArgumentError, ~r/does not implement the Crank behaviour/, fn ->
-        Crank.from_snapshot(%{module: String, state: :foo, data: %{}})
+        Crank.resume(%{module: String, state: :foo, memory: %{}})
       end
     end
 
-    test "raises ArgumentError when snapshot is missing keys" do
-      assert_raise ArgumentError, ~r/expected a map with :module, :state, and :data/, fn ->
-        Crank.from_snapshot(%{module: Door, state: :locked})
-      end
-    end
-
-    test "raises ArgumentError when passed a non-map" do
-      assert_raise ArgumentError, ~r/expected a map/, fn ->
-        Crank.from_snapshot(:not_a_map)
-      end
-    end
-  end
-
-  describe "resume/3" do
-    test "produces the same machine as from_snapshot/1" do
-      via_positional = Crank.resume(Door, :unlocked, %{})
-      via_map = Crank.from_snapshot(%{module: Door, state: :unlocked, data: %{}})
-
-      assert via_positional.module == via_map.module
-      assert via_positional.state == via_map.state
-      assert via_positional.data == via_map.data
-      assert via_positional.effects == via_map.effects
-      assert via_positional.status == via_map.status
-    end
-
-    test "resumed machine can be cranked further" do
-      m = Crank.resume(Door, :unlocked, %{}) |> Crank.crank(:open)
-      assert m.state == :opened
-    end
-
-    test "raises ArgumentError when module is not a Crank module" do
-      assert_raise ArgumentError, ~r/does not implement the Crank behaviour/, fn ->
-        Crank.resume(String, :foo, %{})
+    test "raises ArgumentError when snapshot is not a valid map" do
+      assert_raise ArgumentError, ~r/expected a snapshot map/, fn ->
+        Crank.resume(:not_a_map)
       end
     end
   end

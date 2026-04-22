@@ -15,12 +15,12 @@ defmodule MyApp.VendingPersistence do
     )
   end
 
-  def handle(_event, _measurements, %{module: MyApp.VendingMachine, to: state, data: data}, _config) do
-    snapshot = %{module: MyApp.VendingMachine, state: state, data: data}
+  def handle(_event, _measurements, %{module: MyApp.VendingMachine, to: state, memory: memory}, _config) do
+    snapshot = %{module: MyApp.VendingMachine, state: state, memory: memory}
 
     MyApp.Repo.insert!(
       %MyApp.MachineSnapshot{
-        machine_id: data.machine_id,
+        machine_id: memory.machine_id,
         snapshot: :erlang.term_to_binary(snapshot)
       },
       on_conflict: :replace_all,
@@ -33,9 +33,9 @@ defmodule MyApp.VendingPersistence do
 end
 ```
 
-The snapshot map — `%{module:, state:, data:}` — is exactly the shape `Crank.from_snapshot/1` and `Crank.Server.start_from_snapshot/2` accept. Write it on every transition, read it back on restart. The README's [Persistence section](https://github.com/code-of-kai/crank#persistence) shows the restore side and compares this pattern to event sourcing and hybrid approaches.
+The snapshot map — `%{module:, state:, memory:}` — is exactly the shape `Crank.resume/1` and `Crank.Server.resume/2` accept. Write it on every transition, read it back on restart. The README's [Persistence section](https://github.com/code-of-kai/crank#persistence) shows the restore side and compares this pattern to event sourcing and hybrid approaches.
 
-Call `MyApp.VendingPersistence.attach()` in application startup. The vending machine's `handle/3` has no idea this persistence exists. It never imports Ecto (Elixir's database library). It never calls `Repo`. The persistence adapter listens to domain events and acts on them. The database can be swapped, the schema can change, persistence can be removed entirely -- and the domain model doesn't change.
+Call `MyApp.VendingPersistence.attach()` in application startup. The vending machine's `turn/3` has no idea this persistence exists. It never imports Ecto. It never calls `Repo`. The persistence adapter listens to domain events and acts on them. The database can be swapped, the schema can change, persistence can be removed entirely — and the domain model doesn't change.
 
 ## What just happened
 
@@ -43,11 +43,11 @@ The vending machine module is pure functions. It takes events, applies business 
 
 The persistence module is infrastructure. It listens for state transitions and writes them to a database. It doesn't know about business rules.
 
-They don't import each other. They don't call each other. They communicate through telemetry (Erlang's standard library for emitting observable events from running code) -- every state transition emits a `[:crank, :transition]` event, and adapters (infrastructure modules that plug into the telemetry interface) listen and react.
+They don't import each other. They don't call each other. They communicate through telemetry — every state transition emits a `[:crank, :transition]` event, and adapters listen and react.
 
-This separation has a name: hexagonal architecture (also called ports and adapters). The domain model lives in the center and knows nothing about infrastructure. Infrastructure plugs in at the boundary as adapters. The domain never reaches out -- it declares what happened, and the adapters decide what to do about it.
+This separation has a name: hexagonal architecture (also called ports and adapters). The domain model lives in the centre and knows nothing about infrastructure. Infrastructure plugs in at the boundary as adapters. The domain never reaches out — it declares what happened, and the adapters decide what to do about it.
 
-Crank enforces this boundary automatically. The `handle/3` callback returns data -- it can't execute side effects because there's nothing to execute them with. The architecture makes the wrong thing impossible, not merely discouraged.
+Crank enforces this boundary automatically. `turn/3` returns data — it cannot execute side effects because the return type has nowhere to put them. `wants/2` returns data too — declared effects, not performed ones. The Server is the one place where declared effects become real. The architecture makes the wrong thing impossible, not merely discouraged.
 
 ## How the boundary works
 
@@ -56,29 +56,29 @@ Crank enforces this boundary automatically. The `handle/3` callback returns data
                     │        Domain Model          │
                     │       (Pure Core)            │
                     │                               │
-  events ──────►   │  handle/3                     │  ──────► new state
-                    │  on_enter/3                   │  ──────► effects (data)
+  events ──────►   │  turn/3       (transitions)   │  ──────► new state
+                    │  wants/2      (declarations)  │  ──────► wants (data)
+                    │  reading/2    (projection)    │  ──────► reading
                     │                               │
                     │  No imports. No side effects. │
-                    │  No infrastructure.           │
                     └─────────────────────────────┘
                               │
                     ┌─────────────────────────────┐
                     │        Adapters              │
                     │     (Process Shell)          │
                     │                               │
-  cast/call ───►   │  Crank.Server (gen_statem)    │  ──────► executed effects
+  cast/turn ───►   │  Crank.Server  (gen_statem)   │  ──────► executed wants
                     │  Telemetry handlers           │  ──────► persistence
                     │                               │  ──────► notifications
                     │                               │  ──────► audit logs
                     └─────────────────────────────┘
 ```
 
-The inbound port is `handle/3` -- events go in, state transitions come out. The outbound port is telemetry -- every state transition emits a `[:crank, :transition]` event, and adapters listen and react.
+The inbound ports are `turn/3` (advance) and `reading/2` (observe). The outbound port is telemetry — every state transition emits `[:crank, :transition]`, and adapters listen and react.
 
 The domain model doesn't know who's listening or what they do. It just declares what happened.
 
-`handle/3` must never contain side effects. The moment `handle/3` calls `Repo.insert!`, the domain model requires a database to run. The moment it calls `Mailer.send`, tests send emails. The boundary is broken.
+`turn/3` must never contain side effects. The moment `turn/3` calls `Repo.insert!`, the domain model requires a database to run. The moment it calls `Mailer.send`, tests send emails. The boundary is broken. The type system helps: `turn/3`'s return is pure state — there's no return shape that admits a side effect.
 
 ## Every state change emits a domain event
 
@@ -87,20 +87,27 @@ Every state transition emits `[:crank, :transition]` with this metadata:
 ```elixir
 %{
   module: MyApp.VendingMachine,
-  from: :idle,
-  to: :accepting,
-  event: {:coin, 25},
-  data: %{price: 75, balance: 25, stock: 10}
+  from:   :idle,
+  to:     :accepting,
+  event:  {:coin, 25},
+  memory: %{price: 75, balance: 25, stock: 10, machine_id: "vm-001"}
 }
 ```
 
-This is a domain event -- a record of what just happened to the state machine. It tells which module changed, what state it moved from and to, what caused the transition, and what the data looks like after. That's everything an adapter needs to persist, notify, audit, or broadcast -- without the domain model knowing any of that happens.
+This is a domain event — a record of what just happened. It tells which module changed, what state it moved from and to, what caused the transition, and what the memory looks like after. Everything an adapter needs to persist, notify, audit, or broadcast — without the domain model knowing any of that happens.
+
+Two other telemetry events complete the picture:
+
+- **`[:crank, :start]`** — emitted in `init` when a machine is freshly started. Metadata: `%{module, state, memory}`.
+- **`[:crank, :resume]`** — emitted in `init` when a machine is restored from a snapshot. Metadata: `%{module, state, memory}`.
 
 ## When persistence fails
 
 The telemetry handler runs synchronously inside the `gen_statem` process. If `Repo.insert!` raises, the `gen_statem` process crashes. The supervisor restarts it.
 
-This is usually the right behavior -- if a transition can't be persisted, the machine shouldn't continue as if it succeeded.
+This is usually the right behaviour — if a transition can't be persisted, the machine shouldn't continue as if it succeeded.
+
+**A consequence worth naming**: a crashing infrastructure adapter takes the *aggregate process* with it. Crank's port contract prevents the aggregate from importing infrastructure, but telemetry handlers run inline in the aggregate's process, so an adapter crash is NOT isolated from the domain runtime. Keep adapter handlers small, total where possible, and wrap risky work in `try`/`rescue` + logging when a handler failure shouldn't bring the aggregate down.
 
 For non-fatal persistence:
 
@@ -133,8 +140,7 @@ defmodule MyApp.VendingNotifications do
   end
 
   def handle(_event, _measurements, %{module: MyApp.VendingMachine, to: :out_of_stock} = meta, _config) do
-    # Via Oban for guaranteed delivery
-    %{machine_id: meta.data.machine_id, location: meta.data.location}
+    %{machine_id: meta.memory.machine_id, location: meta.memory.location}
     |> MyApp.Workers.RestockAlert.new()
     |> Oban.insert!()
   end
@@ -143,13 +149,13 @@ defmodule MyApp.VendingNotifications do
 end
 ```
 
-The pattern: match on `to:` to react to specific states. The domain model transitions to `:out_of_stock` because that's what the business rules dictate. The notification adapter decides that this state means "send a restock alert." Two different concerns. Two different modules.
+Pattern-match on `to:` to react to specific states. The domain model transitions to `:out_of_stock` because that's what the business rules dictate. The notification adapter decides that this state means "send a restock alert." Two concerns, two modules.
 
-Use `Task.Supervisor` for fire-and-forget. Use Oban (a background job library with persistence and retries) when delivery matters.
+Use `Task.Supervisor` for fire-and-forget. Use Oban when delivery matters.
 
 ## Audit logging adapter
 
-Every regulated industry needs an audit trail. Every transition in a Crank machine is auditable by default -- an adapter writes it down:
+Every regulated industry needs an audit trail. Every transition in a Crank machine is auditable by default — an adapter writes it down:
 
 ```elixir
 defmodule MyApp.AuditLog do
@@ -166,7 +172,7 @@ defmodule MyApp.AuditLog do
 
   def handle(_event, _measurements, %{module: MyApp.VendingMachine} = meta, _config) do
     Logger.info("vending transition",
-      machine_id: meta.data.machine_id,
+      machine_id: meta.memory.machine_id,
       from: meta.from,
       to: meta.to,
       event: meta.event
@@ -177,13 +183,13 @@ defmodule MyApp.AuditLog do
 end
 ```
 
-For compliance, write to an append-only table (a database table where rows are only inserted, never updated or deleted) instead of Logger:
+For compliance, write to an append-only table instead of Logger:
 
 ```elixir
 def handle(_event, _measurements, %{module: MyApp.VendingMachine} = meta, _config) do
   MyApp.Repo.insert!(%MyApp.AuditEntry{
     entity_type: "vending_machine",
-    entity_id: meta.data.machine_id,
+    entity_id: meta.memory.machine_id,
     from_state: meta.from,
     to_state: meta.to,
     event: meta.event,
@@ -196,7 +202,7 @@ The domain model doesn't know it's being audited. The audit adapter listens to t
 
 ## PubSub adapter
 
-PubSub (publish-subscribe) broadcasts transitions to multiple subscribers. A LiveView (Phoenix's server-rendered interactive UI) can update in real time when a machine changes state:
+PubSub broadcasts transitions to multiple subscribers. A LiveView can update in real time when a machine changes state:
 
 ```elixir
 defmodule MyApp.VendingBroadcast do
@@ -212,7 +218,7 @@ defmodule MyApp.VendingBroadcast do
   def handle(_event, _measurements, %{module: MyApp.VendingMachine} = meta, _config) do
     Phoenix.PubSub.broadcast(
       MyApp.PubSub,
-      "machine:#{meta.data.machine_id}",
+      "machine:#{meta.memory.machine_id}",
       {:machine_transition, meta.from, meta.to}
     )
   end
@@ -236,7 +242,7 @@ end
 
 ## Wiring adapters at startup
 
-Attach adapters before starting servers. The first transition (the initial `:enter` event) fires immediately on process start, so adapters must be listening before any server comes up:
+Attach adapters before starting servers. The `[:crank, :start]` event fires when a server boots, so adapters must be listening before any server comes up:
 
 ```elixir
 defmodule MyApp.Application do
@@ -256,7 +262,7 @@ defmodule MyApp.Application do
       {Oban, oban_config()},
       {Phoenix.PubSub, name: MyApp.PubSub},
       # Start Crank servers after adapters are attached
-      {Crank.Server, {MyApp.VendingMachine, [machine_id: "vm-001", price: 75]}}
+      {MyApp.VendingMachine, [machine_id: "vm-001", price: 75]}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one)
@@ -266,24 +272,24 @@ end
 
 ## Anti-patterns
 
-### Don't put side effects in handle/3
+### Don't put side effects in turn/3
 
 ```elixir
-# BAD -- breaks the domain boundary
-def handle(:dispense, :dispensing, data) do
+# BAD — breaks the domain boundary
+def turn(:dispense, :dispensing, memory) do
   MyApp.Repo.insert!(%MyApp.Transaction{...})  # side effect!
-  {:next_state, :idle, %{data | balance: 0}}
+  {:next, :idle, %{memory | balance: 0}}
 end
 ```
 
-This means `Crank.crank/2` writes to a database. Tests need a database. A LiveView reducer writes to a database. The domain model is no longer pure, and the hexagonal boundary is broken.
+This means `Crank.turn/2` writes to a database. Tests need a database. A LiveView reducer writes to a database. The domain model is no longer pure, and the hexagonal boundary is broken.
 
 The domain model decides *what* happens (state transition). Adapters decide *what to do about it* (persist, notify, audit). Different concerns, different modules.
 
 ### Don't block the gen_statem with slow adapters
 
 ```elixir
-# BAD -- blocks the state machine for 2+ seconds
+# BAD — blocks the state machine for 2+ seconds
 def handle(_event, _measurements, meta, _config) do
   HTTPoison.post!("https://slow-api.example.com/webhook", Jason.encode!(meta))
 end
@@ -294,7 +300,7 @@ The telemetry handler runs synchronously in the `gen_statem` process. While this
 Dispatch async work to a separate process:
 
 ```elixir
-# GOOD -- non-blocking
+# GOOD — non-blocking
 def handle(_event, _measurements, meta, _config) do
   Task.Supervisor.start_child(MyApp.TaskSupervisor, fn ->
     HTTPoison.post!("https://slow-api.example.com/webhook", Jason.encode!(meta))
@@ -312,13 +318,13 @@ def handle(_event, _measurements, meta, _config) do
 end
 ```
 
-### Don't attach adapters inside handle/3
+### Don't attach adapters inside turn/3
 
 ```elixir
-# BAD -- attaches a new adapter on every transition
-def handle({:coin, amount}, :idle, data) do
-  :telemetry.attach("notify-#{data.machine_id}", ...)
-  {:next_state, :accepting, %{data | balance: amount}}
+# BAD — attaches a new adapter on every transition
+def turn({:coin, amount}, :idle, memory) do
+  :telemetry.attach("notify-#{memory.machine_id}", ...)
+  {:next, :accepting, %{memory | balance: amount}}
 end
 ```
 
@@ -333,9 +339,9 @@ test "inserting coins and selecting transitions to dispensing" do
   machine =
     MyApp.VendingMachine
     |> Crank.new(price: 75, machine_id: "vm-001")
-    |> Crank.crank({:coin, 25})
-    |> Crank.crank({:coin, 50})
-    |> Crank.crank({:select, "A3"})
+    |> Crank.turn({:coin, 25})
+    |> Crank.turn({:coin, 50})
+    |> Crank.turn({:select, "A3"})
 
   assert machine.state == :dispensing
 end
@@ -352,7 +358,7 @@ test "persistence adapter saves machine snapshot" do
     from: :idle,
     to: :accepting,
     event: {:coin, 25},
-    data: %{machine_id: "vm-001", price: 75, balance: 25, stock: 10}
+    memory: %{machine_id: "vm-001", price: 75, balance: 25, stock: 10}
   }
 
   MyApp.VendingPersistence.handle([:crank, :transition], %{}, meta, nil)
@@ -361,6 +367,6 @@ test "persistence adapter saves machine snapshot" do
 end
 ```
 
-Each concern is tested independently. The domain model doesn't know about persistence. The persistence adapter doesn't know about the domain model's internals. They communicate through domain events -- the `[:crank, :transition]` telemetry contract.
+Each concern is tested independently. The domain model doesn't know about persistence. The persistence adapter doesn't know about the domain model's internals. They communicate through domain events — the `[:crank, :transition]` telemetry contract.
 
-That's hexagonal architecture. The domain model is pure. Infrastructure plugs in at the boundary. Neither knows about the other. The architecture fell out of keeping side effects out of `handle/3`.
+That's hexagonal architecture. The domain model is pure. Infrastructure plugs in at the boundary. Neither knows about the other. The architecture fell out of keeping side effects out of `turn/3`.

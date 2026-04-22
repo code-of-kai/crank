@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-04-22
+
+Major breaking redesign: Crank is now opinionated Moore, not Mealy. Effects are declared on state arrival (`wants/2`), not on transitions. The API is smaller, the vocabulary is consistent across pure and process modes, and the Moore discipline is enforced structurally — `turn/3` cannot attach effects to edges because the return type has no actions field.
+
+### Changed — breaking
+
+- **Transition callback renamed** `handle/3` / `handle_event/4` → `turn/3`. One callback, no precedence rules, no event type argument.
+- **Init callback renamed** `init/1` → `start/1`.
+- **State-entry callback replaced**: `on_enter/3` removed. In its place, `wants/2` declares what a state wants on arrival. The signature is `wants(state, memory)` — no old-state argument.
+- **New callback** `reading/2` (optional) — what outside callers observe. `Crank.Server.turn/2` auto-replies with this projection.
+- **Return shape from `turn/3`** is pure state: `{:next, state, memory}`, `{:stay, memory}`, `:stay`, `{:stop, reason, memory}`. No actions list. Effects move to `wants/2`.
+- **Struct renamed** `%Crank.Machine{}` → `%Crank{}`. `Crank.Machine` module removed. Field `data` renamed to `memory`. Field `effects` renamed to `wants`. Field `status` renamed to `engine` with values `:running | {:off, reason}`.
+- **User verb renamed** `crank/2` → `turn/2` (and `crank!/2` → `turn!/2`, `can_crank?/2` → `can_turn?/2`). Added `can_turn!/2`. Library name stays Crank.
+- **Server API renamed**: `Crank.Server.call/3` → `turn/3` (auto-replies with `reading/2`). `Crank.Server.start_from_snapshot/2` → `Crank.Server.resume/2`. Added `Crank.Server.reading/2` for read-only projection.
+- **Persistence simplified**: `from_snapshot/1` and `resume/3` collapsed into a single `resume/1` taking a snapshot map.
+- **Want types**: the vocabulary of effects is now `{:after, ms, event}`, `{:next, event}`, `{:send, dest, msg}`, `{:telemetry, name, measurements, metadata}`. Named timeouts, postpone, hibernate, and `:state_timeout` no longer have a direct surface (state timeouts are what `:after` compiles to; other gen_statem escape hatches can be added later if requested).
+
+### Added
+
+- Moore discipline enforced structurally — `turn/3` has no way to declare effects on an edge.
+- `can_turn!/2` — asserts a transition is valid, raises if not.
+- `reading/2` — canonical projection for external observation. Both `Crank.reading/1` and `Crank.Server.turn/2` use it.
+- `Crank.Server.reading/1` — read-only query of current reading. Does not call `turn/3`.
+- `engine` field distinguishes the machine's domain state from its lifecycle flag.
+
+### Removed
+
+- `handle_event/4` callback.
+- `on_enter/3` callback.
+- Actions on transitions (4-tuple `{:next_state, state, data, actions}` return).
+- Event type argument — all events arrive at `turn/3` with the same signature.
+- `Crank.Machine` module (struct folded into `Crank`).
+
 ## [0.3.1] - 2026-04-10
 
 ### Added

@@ -1,7 +1,7 @@
 defmodule Crank.MixProject do
   use Mix.Project
 
-  @version "0.3.1"
+  @version "1.0.0"
   @source_url "https://github.com/code-of-kai/crank"
 
   def project do
@@ -33,7 +33,9 @@ defmodule Crank.MixProject do
     [
       {:telemetry, "~> 1.0"},
       {:stream_data, "~> 1.1", only: :test},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 

@@ -1,19 +1,16 @@
 defmodule Crank.StoppedError do
   @moduledoc """
-  Raised when `Crank.crank/2` or `Crank.crank!/2` receives a machine
-  that has already stopped.
-
-  A machine stops when a `handle/3` clause returns `{:stop, reason, data}`.
-  After that, no more events can be processed. Attempting to crank a
-  stopped machine raises this error with the module, current state,
-  attempted event, and stop reason.
+  Raised when `Crank.turn/2` or `Crank.turn!/2` is called on a machine
+  whose engine is off. A machine's engine stops when `c:Crank.turn/3`
+  returns `{:stop, reason, memory}`. Once stopped, no further events
+  are accepted.
   """
 
   defexception [:module, :state, :event, :reason]
 
   @impl true
   def message(%{module: module, state: state, event: event, reason: reason}) do
-    "cannot crank #{inspect(module)} (in state #{inspect(state)}) " <>
-      "with event #{inspect(event)}: machine is stopped (#{inspect(reason)})"
+    "cannot turn #{inspect(module)} (in state #{inspect(state)}) " <>
+      "with event #{inspect(event)}: engine is off (#{inspect(reason)})"
   end
 end

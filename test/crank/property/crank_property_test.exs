@@ -1,9 +1,7 @@
 defmodule Crank.PropertyTest do
   @moduledoc """
-  Property-based tests for Crank.
-
-  19 invariants, all at 10,000 runs. Sequences up to 1,000 events.
-  ~100M random cranks in ~20 seconds. Every property at full power.
+  Property-based tests for Crank. ~60M random turns across the suite.
+  Fixtures are local; global examples live in `test/support/examples.ex`.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties
@@ -15,64 +13,64 @@ defmodule Crank.PropertyTest do
   @runs 10_000
   @seq 1000
 
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
   # Invariant 1: Machine struct integrity
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: machine struct is always valid after any crank sequence" do
+  property "machine struct is always valid after any turn sequence" do
     check all(events <- turnstile_event_sequence(@seq), max_runs: @runs) do
       machine =
         Enum.reduce(events, Crank.new(Crank.Examples.Turnstile), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
-      assert %Crank.Machine{} = machine
+      assert %Crank{} = machine
       assert machine.state in [:locked, :unlocked]
-      assert is_map(machine.data)
-      assert is_list(machine.effects)
-      assert machine.status == :running
+      assert is_map(machine.memory)
+      assert is_list(machine.wants)
+      assert machine.engine == :running
     end
   end
 
-  # ===========================================================================
-  # Invariant 2: Effects replace (never accumulate)
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
+  # Invariant 2: Turnstile declares no wants — struct.wants is always []
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: effects from crank N never leak into crank N+1" do
+  property "Turnstile wants is always empty (no wants/2 defined)" do
     check all(events <- turnstile_event_sequence(@seq), max_runs: @runs) do
       Enum.reduce(events, Crank.new(Crank.Examples.Turnstile), fn event, m ->
-        new_m = Crank.crank(m, event)
-        assert new_m.effects == []
+        new_m = Crank.turn(m, event)
+        assert new_m.wants == []
         new_m
       end)
     end
   end
 
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
   # Invariant 3: Conservation — coins always equals total coin events
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: coin count equals total coin events" do
+  property "coin count equals total coin events" do
     check all(events <- turnstile_event_sequence(@seq), max_runs: @runs) do
       machine =
         Enum.reduce(events, Crank.new(Crank.Examples.Turnstile), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
-      assert machine.data.coins == Enum.count(events, &(&1 == :coin))
-      assert machine.data.passes <= Enum.count(events, &(&1 == :push))
+      assert machine.memory.coins == Enum.count(events, &(&1 == :coin))
+      assert machine.memory.passes <= Enum.count(events, &(&1 == :push))
     end
   end
 
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
   # Invariant 4: Purity — same inputs always produce same outputs
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: deterministic — same events always produce same result" do
+  property "deterministic — same events always produce same result" do
     check all(events <- turnstile_event_sequence(@seq), max_runs: @runs) do
       run = fn ->
         Enum.reduce(events, Crank.new(Crank.Examples.Turnstile), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
       end
 
@@ -80,45 +78,40 @@ defmodule Crank.PropertyTest do
       b = run.()
 
       assert a.state == b.state
-      assert a.data == b.data
+      assert a.memory == b.memory
     end
   end
 
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
   # Invariant 5: State reachability — only valid states at every step
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: state is always in the declared state set" do
+  property "state is always in the declared state set" do
     check all(events <- turnstile_event_sequence(@seq), max_runs: @runs) do
       Enum.reduce(events, Crank.new(Crank.Examples.Turnstile), fn event, m ->
-        new_m = Crank.crank(m, event)
+        new_m = Crank.turn(m, event)
         assert new_m.state in [:locked, :unlocked]
         new_m
       end)
     end
   end
 
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
   # Invariant 6: Stopped is terminal
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
 
   defmodule StoppableMachine do
     use Crank
 
     @impl true
-    def init(_), do: {:ok, :alive, %{ticks: 0}}
+    def start(_), do: {:ok, :alive, %{ticks: 0}}
 
     @impl true
-    def handle_event(_, :tick, :alive, data) do
-      {:keep_state, %{data | ticks: data.ticks + 1}}
-    end
-
-    def handle_event(_, :die, :alive, data) do
-      {:stop, :dead, data}
-    end
+    def turn(:tick, :alive, m), do: {:stay, %{m | ticks: m.ticks + 1}}
+    def turn(:die, :alive, m), do: {:stop, :dead, m}
   end
 
-  property "invariant: once stopped, every subsequent crank raises StoppedError" do
+  property "once stopped, every subsequent turn raises StoppedError" do
     check all(
             pre_events <- list_of(constant(:tick), min_length: 0, max_length: 100),
             post_events <- list_of(member_of([:tick, :die, :anything]), min_length: 1, max_length: 20),
@@ -126,304 +119,235 @@ defmodule Crank.PropertyTest do
           ) do
       machine =
         Enum.reduce(pre_events, Crank.new(StoppableMachine), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
-      stopped = Crank.crank(machine, :die)
-      assert stopped.status == {:stopped, :dead}
+      stopped = Crank.turn(machine, :die)
+      assert stopped.engine == {:off, :dead}
 
       Enum.each(post_events, fn event ->
-        assert_raise Crank.StoppedError, fn -> Crank.crank(stopped, event) end
+        assert_raise Crank.StoppedError, fn -> Crank.turn(stopped, event) end
       end)
     end
   end
 
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
   # Invariant 7: Monotonicity — counters never decrease
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: coins counter is monotonically non-decreasing" do
+  property "coins counter is monotonically non-decreasing" do
     check all(events <- turnstile_event_sequence(@seq), max_runs: @runs) do
       {_final, coins_history} =
         Enum.reduce(events, {Crank.new(Crank.Examples.Turnstile), [0]}, fn event, {m, history} ->
-          new_m = Crank.crank(m, event)
-          {new_m, [new_m.data.coins | history]}
+          new_m = Crank.turn(m, event)
+          {new_m, [new_m.memory.coins | history]}
         end)
 
-      sorted = coins_history |> Enum.reverse()
+      sorted = Enum.reverse(coins_history)
       assert sorted == Enum.sort(sorted)
     end
   end
 
-  # ===========================================================================
-  # Invariant 8: on_enter fires exactly once per state change
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
+  # Invariant 8: Turnstile — coin then push always passes
+  # ──────────────────────────────────────────────────────────────────────────
 
-  defmodule EnterCounter do
-    use Crank
-
-    @impl true
-    def init(_), do: {:ok, :a, %{enters: 0, state_changes: 0}}
-
-    @impl true
-    def handle_event(_, :go, :a, data) do
-      {:next_state, :b, %{data | state_changes: data.state_changes + 1}}
-    end
-
-    def handle_event(_, :go, :b, data) do
-      {:next_state, :a, %{data | state_changes: data.state_changes + 1}}
-    end
-
-    def handle_event(_, :stay, _, _data), do: :keep_state_and_data
-
-    @impl true
-    def on_enter(_old, _new, data) do
-      {:keep_state, %{data | enters: data.enters + 1}}
-    end
-  end
-
-  property "invariant: on_enter fires exactly once per next_state, never on keep_state" do
-    check all(events <- list_of(member_of([:go, :stay]), min_length: 1, max_length: @seq), max_runs: @runs) do
-      machine =
-        Enum.reduce(events, Crank.new(EnterCounter), fn event, m ->
-          Crank.crank(m, event)
-        end)
-
-      assert machine.data.enters == machine.data.state_changes
-    end
-  end
-
-  # ===========================================================================
-  # Invariant 9: Turnstile — coin then push always passes
-  # ===========================================================================
-
-  property "invariant: coin then push always increments passes by 1" do
+  property "coin then push always increments passes by 1" do
     check all(machine <- turnstile_in_random_state(), max_runs: @runs) do
-      after_coin = Crank.crank(machine, :coin)
+      after_coin = Crank.turn(machine, :coin)
       assert after_coin.state == :unlocked
 
-      passes_before = after_coin.data.passes
-      after_push = Crank.crank(after_coin, :push)
+      passes_before = after_coin.memory.passes
+      after_push = Crank.turn(after_coin, :push)
       assert after_push.state == :locked
-      assert after_push.data.passes == passes_before + 1
+      assert after_push.memory.passes == passes_before + 1
     end
   end
 
-  # ===========================================================================
-  # Invariant 10: crank! and crank agree on non-stop results
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
+  # Invariant 9: turn! and turn agree on non-stop results
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: crank! returns same machine as crank when not stopping" do
+  property "turn! returns same machine as turn when not stopping" do
     check all(events <- turnstile_event_sequence(@seq), max_runs: @runs) do
       machine = Crank.new(Crank.Examples.Turnstile)
 
-      {via_crank, via_bang} =
+      {via_turn, via_bang} =
         Enum.reduce(events, {machine, machine}, fn event, {m1, m2} ->
-          {Crank.crank(m1, event), Crank.crank!(m2, event)}
+          {Crank.turn(m1, event), Crank.turn!(m2, event)}
         end)
 
-      assert via_crank.state == via_bang.state
-      assert via_crank.data == via_bang.data
+      assert via_turn.state == via_bang.state
+      assert via_turn.memory == via_bang.memory
     end
   end
 
-  # ===========================================================================
-  # Invariant 11: Pure/process equivalence
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
+  # Invariant 10: Pure/process equivalence
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: pure crank and Server produce identical state and data" do
+  property "pure turn and Server produce identical state and memory" do
     check all(events <- turnstile_event_sequence(100), max_runs: @runs) do
-      # Pure path
       pure =
         Enum.reduce(events, Crank.new(Crank.Examples.Turnstile), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
-      # Process path — send all events, then read final state via :sys
       {:ok, pid} = Crank.Server.start_link(Crank.Examples.Turnstile, [])
       Enum.each(events, &Crank.Server.cast(pid, &1))
 
-      # Synchronize: :sys.get_state blocks until the mailbox is drained
-      {process_state, %Crank.Server.Adapter{data: process_data}} = :sys.get_state(pid)
-      GenServer.stop(pid)
+      # :sys.get_state synchronizes — mailbox is drained before it returns.
+      {process_state, %Crank.Server.Adapter{memory: process_memory}} = :sys.get_state(pid)
+      Crank.Server.stop(pid)
 
       assert pure.state == process_state
-      assert pure.data == process_data
+      assert pure.memory == process_memory
     end
   end
 
-  # ===========================================================================
-  # Invariant 12: Multi-sender conservation (Joe Armstrong #1)
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
+  # Invariant 11: Multi-sender conservation
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: conservation holds regardless of sender interleaving" do
+  property "conservation holds regardless of sender interleaving" do
     check all(
-            # Generate events split across N senders
             sender_count <- integer(2..8),
             events_per_sender <- integer(5..30),
             max_runs: @runs
           ) do
       {:ok, pid} = Crank.Server.start_link(Crank.Examples.Turnstile, [])
 
-      # Each sender gets a random event list and fires concurrently
       senders =
         for _ <- 1..sender_count do
           events = for _ <- 1..events_per_sender, do: Enum.random([:coin, :push])
 
           Task.async(fn ->
-            Enum.each(events, fn event ->
-              Crank.Server.cast(pid, event)
-            end)
-
+            Enum.each(events, fn event -> Crank.Server.cast(pid, event) end)
             events
           end)
         end
 
       all_events = Task.await_many(senders) |> List.flatten()
 
-      # Drain the mailbox
-      {_state, %Crank.Server.Adapter{data: data}} = :sys.get_state(pid)
-      GenServer.stop(pid)
+      {_state, %Crank.Server.Adapter{memory: memory}} = :sys.get_state(pid)
+      Crank.Server.stop(pid)
 
-      # Conservation: total coins == total coin events regardless of interleaving
       total_coins = Enum.count(all_events, &(&1 == :coin))
-      assert data.coins == total_coins
+      assert memory.coins == total_coins
 
-      # Passes bounded by total pushes
       total_pushes = Enum.count(all_events, &(&1 == :push))
-      assert data.passes <= total_pushes
-      assert data.passes >= 0
+      assert memory.passes <= total_pushes
+      assert memory.passes >= 0
     end
   end
 
-  # ===========================================================================
-  # Invariant 13: Restart equivalence (Joe Armstrong #2)
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
+  # Invariant 12: Restart equivalence
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: restarted server is indistinguishable from a fresh one" do
+  property "restarted server is indistinguishable from a fresh one" do
     check all(
             pre_events <- turnstile_event_sequence(50),
             post_events <- turnstile_event_sequence(50),
             max_runs: @runs
           ) do
-      # Start, crank some events, then kill the process
       {:ok, pid} = Crank.Server.start_link(Crank.Examples.Turnstile, [])
       Enum.each(pre_events, &Crank.Server.cast(pid, &1))
       :sys.get_state(pid)
-      GenServer.stop(pid)
+      Crank.Server.stop(pid)
 
-      # Start fresh, send only the post_events
       {:ok, fresh_pid} = Crank.Server.start_link(Crank.Examples.Turnstile, [])
       Enum.each(post_events, &Crank.Server.cast(fresh_pid, &1))
 
-      {fresh_state, %Crank.Server.Adapter{data: fresh_data}} = :sys.get_state(fresh_pid)
-      GenServer.stop(fresh_pid)
+      {fresh_state, %Crank.Server.Adapter{memory: fresh_memory}} = :sys.get_state(fresh_pid)
+      Crank.Server.stop(fresh_pid)
 
-      # Compare with pure path (fresh machine + post_events only)
       pure =
         Enum.reduce(post_events, Crank.new(Crank.Examples.Turnstile), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
-      # Restarted server must match a fresh machine — no leaked state
       assert pure.state == fresh_state
-      assert pure.data == fresh_data
+      assert pure.memory == fresh_memory
     end
   end
 
-  # ===========================================================================
-  # Order machine properties (complex, 5 states, 8 events, effects, on_enter)
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
+  # Order machine properties
+  # ──────────────────────────────────────────────────────────────────────────
 
-  property "invariant: Order state is always in the declared state set" do
+  property "Order state is always in the declared state set" do
     check all(events <- order_event_sequence(@seq), max_runs: @runs) do
       Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
-        new_m = Crank.crank(m, event)
+        new_m = Crank.turn(m, event)
         assert new_m.state in Crank.Examples.Order.states()
         new_m
       end)
     end
   end
 
-  property "invariant: Order transitions counter equals actual state changes" do
+  property "Order wants matches the state it's in" do
     check all(events <- order_event_sequence(@seq), max_runs: @runs) do
       machine =
         Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
-      # on_enter logs every transition — its length must equal transitions count
-      assert length(machine.data.enter_log) == machine.data.transitions
+      # Moore invariant: when wants is populated, it equals what the state declares.
+      case machine.wants do
+        [] ->
+          :ok
+
+        wants ->
+          assert wants == Crank.Examples.Order.wants(machine.state, machine.memory)
+      end
     end
   end
 
-  property "invariant: Order on_enter log records correct from→to pairs" do
-    check all(events <- order_event_sequence(200), max_runs: @runs) do
-      machine =
-        Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
-          Crank.crank(m, event)
-        end)
-
-      # Every entry in enter_log should have valid states
-      valid = Crank.Examples.Order.states()
-
-      Enum.each(machine.data.enter_log, fn {from, to} ->
-        assert from in valid, "on_enter from #{inspect(from)} not in valid states"
-        assert to in valid, "on_enter to #{inspect(to)} not in valid states"
-      end)
-    end
-  end
-
-  property "invariant: Order cancelled is absorbing — no escape once cancelled" do
+  property "Order cancelled is absorbing — no escape once cancelled" do
     check all(
             pre <- order_event_sequence(100),
             post <- order_event_sequence(100),
             max_runs: @runs
           ) do
-      # Crank until we hit cancelled (force it with a :cancel at the end)
       machine =
         Enum.reduce(pre ++ [:cancel], Crank.new(Crank.Examples.Order), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
       if machine.state == :cancelled do
-        # Every subsequent crank should stay cancelled
-        final =
-          Enum.reduce(post, machine, fn event, m ->
-            Crank.crank(m, event)
-          end)
-
+        final = Enum.reduce(post, machine, fn event, m -> Crank.turn(m, event) end)
         assert final.state == :cancelled
       end
     end
   end
 
-  property "invariant: Order pure/process equivalence (complex machine)" do
+  property "Order pure/process equivalence" do
     check all(events <- order_event_sequence(100), max_runs: @runs) do
       pure =
         Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
       {:ok, pid} = Crank.Server.start_link(Crank.Examples.Order, [])
       Enum.each(events, &Crank.Server.cast(pid, &1))
 
-      {process_state, %Crank.Server.Adapter{data: process_data}} = :sys.get_state(pid)
-      GenServer.stop(pid)
+      {process_state, %Crank.Server.Adapter{memory: process_memory}} = :sys.get_state(pid)
+      Crank.Server.stop(pid)
 
       assert pure.state == process_state
-      assert pure.data.order_id == process_data.order_id
-      assert pure.data.total == process_data.total
-      assert pure.data.transitions == process_data.transitions
-      assert pure.data.notes == process_data.notes
+      assert pure.memory.order_id == process_memory.order_id
+      assert pure.memory.total == process_memory.total
+      assert pure.memory.transitions == process_memory.transitions
+      assert pure.memory.notes == process_memory.notes
     end
   end
 
-  property "invariant: Order determinism across complex event sequences" do
+  property "Order determinism across complex event sequences" do
     check all(events <- order_event_sequence(@seq), max_runs: @runs) do
       run = fn ->
         Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
       end
 
@@ -431,34 +355,34 @@ defmodule Crank.PropertyTest do
       b = run.()
 
       assert a.state == b.state
-      assert a.data == b.data
-      assert a.effects == b.effects
+      assert a.memory == b.memory
+      assert a.wants == b.wants
     end
   end
 
-  # ===========================================================================
-  # Submission machine properties (Wlaschin-style struct states)
-  # ===========================================================================
+  # ──────────────────────────────────────────────────────────────────────────
+  # Submission machine properties (struct-per-state)
+  # ──────────────────────────────────────────────────────────────────────────
 
   alias Crank.Examples.Submission.{Validating, Quoted, Bound, Declined}
 
   @submission_structs [Validating, Quoted, Bound, Declined]
 
-  property "invariant: Submissionstate is always one of the 4 struct types" do
+  property "Submission state is always one of the 4 struct types" do
     check all(events <- submission_event_sequence(@seq), max_runs: @runs) do
       Enum.reduce(events, Crank.new(Crank.Examples.Submission), fn event, m ->
-        new_m = Crank.crank(m, event)
+        new_m = Crank.turn(m, event)
         assert new_m.state.__struct__ in @submission_structs
         new_m
       end)
     end
   end
 
-  property "invariant: Submissionillegal states are unrepresentable" do
+  property "Submission illegal states are unrepresentable" do
     check all(events <- submission_event_sequence(@seq), max_runs: @runs) do
       machine =
         Enum.reduce(events, Crank.new(Crank.Examples.Submission), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
       state = machine.state
@@ -487,7 +411,7 @@ defmodule Crank.PropertyTest do
     end
   end
 
-  property "invariant: SubmissionDeclined is absorbing — no escape once declined" do
+  property "Submission Declined is absorbing — no escape once declined" do
     check all(
             pre <- submission_event_sequence(100),
             post <- submission_event_sequence(100),
@@ -495,26 +419,22 @@ defmodule Crank.PropertyTest do
           ) do
       machine =
         Enum.reduce(pre ++ [:decline], Crank.new(Crank.Examples.Submission), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
       if match?(%Declined{}, machine.state) do
-        final =
-          Enum.reduce(post, machine, fn event, m ->
-            Crank.crank(m, event)
-          end)
-
+        final = Enum.reduce(post, machine, fn event, m -> Crank.turn(m, event) end)
         assert %Declined{} = final.state
       end
     end
   end
 
-  property "invariant: SubmissionBound is absorbing — no escape once bound" do
+  property "Submission Bound is absorbing — no escape once bound" do
     check all(events <- submission_event_sequence(@seq), max_runs: @runs) do
       {_final, saw_bound_escape} =
         Enum.reduce(events, {Crank.new(Crank.Examples.Submission), false}, fn event, {m, escaped} ->
           was_bound = match?(%Bound{}, m.state)
-          new_m = Crank.crank(m, event)
+          new_m = Crank.turn(m, event)
           now_not_bound = not match?(%Bound{}, new_m.state)
           {new_m, escaped or (was_bound and now_not_bound)}
         end)
@@ -523,11 +443,11 @@ defmodule Crank.PropertyTest do
     end
   end
 
-  property "invariant: Submissiondeterminism across complex event sequences" do
+  property "Submission determinism across complex event sequences" do
     check all(events <- submission_event_sequence(@seq), max_runs: @runs) do
       run = fn ->
         Enum.reduce(events, Crank.new(Crank.Examples.Submission), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
       end
 
@@ -535,47 +455,25 @@ defmodule Crank.PropertyTest do
       b = run.()
 
       assert a.state == b.state
-      assert a.data == b.data
+      assert a.memory == b.memory
     end
   end
 
-  property "invariant: Submissionpure/process equivalence with struct states" do
+  property "Submission pure/process equivalence with struct states" do
     check all(events <- submission_event_sequence(100), max_runs: @runs) do
       pure =
         Enum.reduce(events, Crank.new(Crank.Examples.Submission), fn event, m ->
-          Crank.crank(m, event)
+          Crank.turn(m, event)
         end)
 
       {:ok, pid} = Crank.Server.start_link(Crank.Examples.Submission, [])
       Enum.each(events, &Crank.Server.cast(pid, &1))
 
-      {process_state, %Crank.Server.Adapter{data: process_data}} = :sys.get_state(pid)
-      GenServer.stop(pid)
+      {process_state, %Crank.Server.Adapter{memory: process_memory}} = :sys.get_state(pid)
+      Crank.Server.stop(pid)
 
       assert pure.state == process_state
-      assert pure.data.parameters == process_data.parameters
-    end
-  end
-
-  property "invariant: Submissionon_enter receives struct states and logs them" do
-    check all(events <- submission_event_sequence(200), max_runs: @runs) do
-      machine =
-        Enum.reduce(events, Crank.new(Crank.Examples.Submission), fn event, m ->
-          Crank.crank(m, event)
-        end)
-
-      enter_entries =
-        Enum.filter(machine.data.audit, fn
-          {:enter, _, _} -> true
-          _ -> false
-        end)
-
-      Enum.each(enter_entries, fn {:enter, from_mod, to_mod} ->
-        assert from_mod in @submission_structs,
-               "on_enter from #{inspect(from_mod)} not in valid state modules"
-        assert to_mod in @submission_structs,
-               "on_enter to #{inspect(to_mod)} not in valid state modules"
-      end)
+      assert pure.memory.parameters == process_memory.parameters
     end
   end
 end

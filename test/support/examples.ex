@@ -1,194 +1,211 @@
 defmodule Crank.Examples.Door do
-  @moduledoc false
+  @moduledoc """
+  A door with three states and four transitions. No memory, no wants.
+
+      locked ──unlock──→ unlocked ──open──→ opened
+         ↑                 │                  │
+         └─────lock────────┘                  │
+                 ↑                            │
+                 └─────────close──────────────┘
+  """
   use Crank
 
   @impl true
-  def init(_opts), do: {:ok, :locked, %{}}
+  def start(_opts), do: {:ok, :locked, %{}}
 
   @impl true
-  def handle_event(_, :unlock, :locked, data), do: {:next_state, :unlocked, data}
-  def handle_event(_, :lock, :unlocked, data), do: {:next_state, :locked, data}
-  def handle_event(_, :open, :unlocked, data), do: {:next_state, :opened, data}
-  def handle_event(_, :close, :opened, data), do: {:next_state, :unlocked, data}
+  def turn(:unlock, :locked, memory), do: {:next, :unlocked, memory}
+  def turn(:lock, :unlocked, memory), do: {:next, :locked, memory}
+  def turn(:open, :unlocked, memory), do: {:next, :opened, memory}
+  def turn(:close, :opened, memory), do: {:next, :unlocked, memory}
 end
 
 defmodule Crank.Examples.Turnstile do
-  @moduledoc false
+  @moduledoc """
+  A turnstile with two states. Keeps running counters in memory.
+
+      locked ──coin──→ unlocked ──push──→ locked
+      (push ignored)   (coin adds to balance, stays)
+  """
   use Crank
 
   @impl true
-  def init(_opts), do: {:ok, :locked, %{coins: 0, passes: 0}}
+  def start(_opts), do: {:ok, :locked, %{coins: 0, passes: 0}}
 
   @impl true
-  def handle_event(_, :coin, :locked, data) do
-    {:next_state, :unlocked, %{data | coins: data.coins + 1}}
+  def turn(:coin, :locked, memory) do
+    {:next, :unlocked, %{memory | coins: memory.coins + 1}}
   end
 
-  def handle_event(_, :push, :unlocked, data) do
-    {:next_state, :locked, %{data | passes: data.passes + 1}}
+  def turn(:push, :unlocked, memory) do
+    {:next, :locked, %{memory | passes: memory.passes + 1}}
   end
 
-  def handle_event(_, :coin, :unlocked, data) do
-    {:keep_state, %{data | coins: data.coins + 1}}
+  def turn(:coin, :unlocked, memory) do
+    {:stay, %{memory | coins: memory.coins + 1}}
   end
 
-  def handle_event(_, :push, :locked, _data) do
-    :keep_state_and_data
+  def turn(:push, :locked, _memory), do: :stay
+end
+
+defmodule Crank.Examples.VendingMachine do
+  @moduledoc """
+  A vending machine showing the Moore discipline end-to-end:
+  `c:Crank.turn/3` handles only state, `c:Crank.wants/2` declares timeouts
+  per state, `c:Crank.reading/2` projects what external callers see.
+
+      idle ──coin──→ accepting ──select──→ dispensing
+       ↑                │                      │
+       └──refund────────┘                      │
+                                ┌──dispensed───┘
+                                ↓
+                              idle
+  """
+  use Crank
+
+  @impl true
+  def start(opts) do
+    {:ok, :idle, %{price: opts[:price] || 100, balance: 0, selection: nil}}
   end
+
+  @impl true
+  def turn({:coin, amount}, :idle, memory) do
+    {:next, :accepting, %{memory | balance: amount}}
+  end
+
+  def turn({:coin, amount}, :accepting, memory) do
+    {:stay, %{memory | balance: memory.balance + amount}}
+  end
+
+  def turn({:select, item}, :accepting, %{balance: b, price: p} = memory) when b >= p do
+    {:next, :dispensing, %{memory | selection: item}}
+  end
+
+  def turn(:dispensed, :dispensing, memory) do
+    {:next, :idle, %{memory | balance: 0, selection: nil}}
+  end
+
+  def turn(:refund, :accepting, memory) do
+    {:next, :idle, %{memory | balance: 0}}
+  end
+
+  # Moore: timeouts attach to states, not to the edges that arrived there.
+  @impl true
+  def wants(:accepting, _memory), do: [{:after, 60_000, :timeout_refund}]
+  def wants(:dispensing, _memory), do: [{:after, 5_000, :jam}]
+  def wants(_state, _memory), do: []
+
+  # Moore: what callers see is f(state, memory). No edge-coupling.
+  @impl true
+  def reading(:idle, _memory), do: %{status: :idle}
+  def reading(:accepting, memory), do: %{status: :accepting, balance: memory.balance}
+  def reading(:dispensing, memory), do: %{status: :dispensing, item: memory.selection}
 end
 
 defmodule Crank.Examples.Order do
   @moduledoc """
-  An order that moves through five states: pending, paid, shipped,
-  delivered, and cancelled.
+  An order that moves through five states. Every (state, event) pair is
+  handled — the catch-all makes this a total function, which property
+  tests need when they fire random events.
 
       pending ──pay──→ paid ──ship──→ shipped ──deliver──→ delivered
-        │                │                │
-        └──cancel──→  cancelled  ←──cancel─┘
+        │               │               │
+        └──cancel──→  cancelled  ←──cancel──┘
                          ↑
-        (any state)──cancel──→ cancelled
+          (any state)──cancel──→ cancelled
 
-  Every event is handled in every state. Invalid events in a given
-  state hit the catch-all clause and return `:keep_state_and_data` --
-  a deliberate no-op. Without the catch-all, unhandled events would
-  crash with `FunctionClauseError`. This makes the machine a total
-  function (every input produces a defined output), which is what
-  property testing with random event sequences requires.
-
-  The `:paid` and `:shipped` states return state timeout effects.
-  `on_enter/3` logs every transition. All states accept `:note`.
+  Long-running timeouts — payment confirmation, delivery deadline — are
+  declared by `c:Crank.wants/2` per state. The Mealy version attached
+  them to the transitions that arrived. Moore attaches them to the states
+  that have them.
   """
   use Crank
 
   @states [:pending, :paid, :shipped, :delivered, :cancelled]
-  @events [:pay, :ship, :deliver, :cancel, :note, :rush, :refund, :noop]
+  @events [:pay, :ship, :deliver, :cancel, :note, :refund, :noop]
 
-  @doc "Returns the list of all valid state atoms."
+  @doc "All valid states."
   def states, do: @states
 
-  @doc "Returns the list of all valid event atoms."
+  @doc "All valid events."
   def events, do: @events
 
   @impl true
-  def init(opts) do
-    {:ok, :pending, %{
-      order_id: opts[:order_id] || 0,
-      notes: [],
-      total: opts[:total] || 100,
-      transitions: 0,
-      enter_log: []
-    }}
+  def start(opts) do
+    {:ok, :pending,
+     %{
+       order_id: opts[:order_id] || 0,
+       total: opts[:total] || 100,
+       notes: [],
+       transitions: 0
+     }}
   end
 
   @impl true
-  # --- pending ---
-  def handle_event(_, :pay, :pending, data) do
-    {:next_state, :paid, %{data | transitions: data.transitions + 1},
-     [{:state_timeout, 86_400_000, :payment_confirmation}]}
+  def turn(:pay, :pending, memory) do
+    {:next, :paid, bump(memory)}
   end
 
-  def handle_event(_, :cancel, :pending, data) do
-    {:next_state, :cancelled, %{data | transitions: data.transitions + 1}}
+  def turn(:cancel, :pending, memory) do
+    {:next, :cancelled, bump(memory)}
   end
 
-  # --- paid ---
-  def handle_event(_, :ship, :paid, data) do
-    {:next_state, :shipped, %{data | transitions: data.transitions + 1},
-     [{:state_timeout, 172_800_000, :delivery_deadline}]}
+  def turn(:ship, :paid, memory) do
+    {:next, :shipped, bump(memory)}
   end
 
-  def handle_event(_, :cancel, :paid, data) do
-    {:next_state, :cancelled, %{data | transitions: data.transitions + 1}}
+  def turn(:cancel, :paid, memory) do
+    {:next, :cancelled, bump(memory)}
   end
 
-  def handle_event(_, :rush, :paid, data) do
-    {:keep_state, %{data | notes: ["rush requested" | data.notes]},
-     [{:state_timeout, 3_600_000, :rush_reminder}]}
+  def turn(:deliver, :shipped, memory) do
+    {:next, :delivered, bump(memory)}
   end
 
-  # --- shipped ---
-  def handle_event(_, :deliver, :shipped, data) do
-    {:next_state, :delivered, %{data | transitions: data.transitions + 1}}
+  def turn(:cancel, :shipped, memory) do
+    {:next, :cancelled, bump(memory)}
   end
 
-  def handle_event(_, :cancel, :shipped, data) do
-    {:next_state, :cancelled, %{data | transitions: data.transitions + 1}}
+  def turn(:refund, :delivered, memory) do
+    {:next, :cancelled, bump(%{memory | notes: ["refunded" | memory.notes]})}
   end
 
-  # --- note (any state) ---
-  def handle_event(_, :note, _state, data) do
-    {:keep_state, %{data | notes: ["note" | data.notes]}}
+  def turn(:note, _state, memory) do
+    {:stay, %{memory | notes: ["note" | memory.notes]}}
   end
 
-  # --- refund (only delivered) ---
-  def handle_event(_, :refund, :delivered, data) do
-    {:next_state, :cancelled, %{data | transitions: data.transitions + 1,
-                                       notes: ["refunded" | data.notes]}}
-  end
+  def turn(:noop, _state, _memory), do: :stay
 
-  # --- noop (any state) ---
-  def handle_event(_, :noop, _state, _data) do
-    :keep_state_and_data
-  end
-
-  # --- catch-all for events that don't apply in current state ---
-  # Total function: every (state, event) pair is handled.
-  def handle_event(_, _event, _state, _data) do
-    :keep_state_and_data
-  end
+  # NOTE: This catch-all exists specifically so random event sequences in
+  # property tests don't crash the machine. Production FSMs should NOT include
+  # a catch-all — unhandled events should raise `FunctionClauseError` so
+  # misbehaving callers are surfaced loudly. Let-it-crash is the default for
+  # real code; totalising is a property-testing affordance.
+  def turn(_event, _state, _memory), do: :stay
 
   @impl true
-  def on_enter(old_state, new_state, data) do
-    {:keep_state, %{data | enter_log: [{old_state, new_state} | data.enter_log]}}
-  end
+  def wants(:paid, _memory), do: [{:after, 86_400_000, :payment_confirmation}]
+  def wants(:shipped, _memory), do: [{:after, 172_800_000, :delivery_deadline}]
+  def wants(_state, _memory), do: []
+
+  defp bump(memory), do: %{memory | transitions: memory.transitions + 1}
 end
 
 defmodule Crank.Examples.Submission do
   @moduledoc """
-  A submission workflow where each state is its own struct.
-
-  `%Validating{}` has a `violations` field. `%Quoted{}` has `quotes`
-  and `selected`. `%Bound{}` has `quote` and `bound_at`. Each struct
-  carries only the fields that exist in that state. A `%Quoted{}`
-  can't have a `violations` field because the struct doesn't define
-  one. The compiler enforces this.
-
-  Scott Wlaschin called this pattern "Making Illegal States
-  Unrepresentable." Each state is its own struct, so a `%Quoted{}`
-  can't have a `violations` field -- the struct doesn't define one.
-  The compiler rejects it.
-
-  Crank doesn't need a special mode for this. The `state` field
-  accepts any Elixir term. Structs are terms. So struct-per-state
-  works out of the box.
+  A submission workflow where each state is its own struct. The struct
+  carries only the fields that exist in that state. A `%Quoted{}` can't
+  have a `violations` field — the struct doesn't define one.
 
       Validating ──validate──→ Quoted ──bind──→ Bound
-          │                      │
-          └──decline──→ Declined ←──decline──┘
+           │                     │
+           └──decline──→ Declined ←──decline──┘
 
-  State structs carry state-specific data. The `data` map carries
-  cross-cutting concerns shared across all states (parameters, audit).
-
-  Elixir structs are immutable. `%Validating{violations: []}` and
-  `%Validating{violations: [:age]}` are two different values. That's
-  a state change -- use `{:next_state, %Validating{updated}, data}`.
-  `:keep_state` means the state is literally the same value -- only
-  `data` changed. This matters because `{:next_state, ...}` triggers
-  `on_enter/3` and `:keep_state` does not.
-
-  Every event is handled in every state (total function).
-
-  ## Type annotations
-
-  The `@type state` union below lists every valid state struct. Today
-  these annotations serve as documentation and Dialyzer input. When
-  Elixir's set-theoretic type system (introduced in v1.17) can check
-  them, unhandled state variants will produce compiler warnings
-  without any code changes.
+  Scott Wlaschin's *Making Illegal States Unrepresentable*. Crank supports
+  this out of the box because `state` is `term()` and struct-matching in
+  `c:Crank.turn/3` naturally splits by state.
   """
   use Crank
-
-  # --- State structs (each state owns its data) ---
 
   defmodule Validating do
     @moduledoc false
@@ -214,95 +231,70 @@ defmodule Crank.Examples.Submission do
     defstruct reason: nil
   end
 
-  # --- Type union: the set of all valid states ---
-
-  @typedoc "One of the four state structs: `Validating`, `Quoted`, `Bound`, or `Declined`."
+  @typedoc "One of four state structs."
   @type state :: Validating.t() | Quoted.t() | Bound.t() | Declined.t()
 
-  @typedoc "Data shared across all states: parameters and an audit trail."
-  @type data :: %{parameters: map(), audit: [term()]}
+  @typedoc "Cross-state memory: parameters and an audit log."
+  @type memory :: %{parameters: map(), audit: [term()]}
 
-  @typedoc "Events the submission machine accepts."
-  @type event ::
-          {:violation, atom()}
-          | :validate
-          | {:add_quote, map()}
-          | {:select, non_neg_integer()}
-          | :bind
-          | :decline
-          | :note
-          | :noop
-
-  @doc "Returns the list of all state struct modules."
+  @doc "All state struct modules."
   @spec state_modules() :: [module()]
   def state_modules, do: [Validating, Quoted, Bound, Declined]
 
-  @doc "Returns the list of atom events. Tuple events (`:violation`, `:add_quote`, `:select`) are generated separately in tests."
+  @doc "Atom events (tuple events generated separately in property tests)."
   @spec events() :: [atom()]
   def events, do: [:validate, :bind, :decline, :note, :noop]
 
   @impl true
-  @spec init(keyword()) :: {:ok, state(), data()}
-  def init(opts) do
+  @spec start(keyword()) :: {:ok, state(), memory()}
+  def start(opts) do
     {:ok, %Validating{}, %{parameters: opts[:parameters] || %{}, audit: []}}
   end
 
   @impl true
-  # --- Validating ---
-  @spec handle_event(Crank.event_type(), event(), state(), data()) :: Crank.handle_event_result()
-  def handle_event(_, {:violation, v}, %Validating{} = s, data) do
-    {:next_state, %Validating{s | violations: [v | s.violations]}, data}
+  # ── Validating ──
+  def turn({:violation, v}, %Validating{} = s, memory) do
+    {:next, %Validating{s | violations: [v | s.violations]}, memory}
   end
 
-  def handle_event(_, :validate, %Validating{violations: []}, data) do
-    {:next_state, %Quoted{}, data}
+  def turn(:validate, %Validating{violations: []}, memory) do
+    {:next, %Quoted{}, memory}
   end
 
-  def handle_event(_, :validate, %Validating{violations: vs}, data) do
-    {:next_state, %Declined{reason: {:violations, vs}}, data}
+  def turn(:validate, %Validating{violations: vs}, memory) do
+    {:next, %Declined{reason: {:violations, vs}}, memory}
   end
 
-  def handle_event(_, :decline, %Validating{}, data) do
-    {:next_state, %Declined{reason: :manual}, data}
+  def turn(:decline, %Validating{}, memory) do
+    {:next, %Declined{reason: :manual}, memory}
   end
 
-  # --- Quoted ---
-  def handle_event(_, {:add_quote, q}, %Quoted{} = s, data) do
-    {:next_state, %Quoted{s | quotes: [q | s.quotes]}, data}
+  # ── Quoted ──
+  def turn({:add_quote, q}, %Quoted{} = s, memory) do
+    {:next, %Quoted{s | quotes: [q | s.quotes]}, memory}
   end
 
-  def handle_event(_, {:select, idx}, %Quoted{quotes: quotes} = s, data)
-      when quotes != [] do
+  def turn({:select, idx}, %Quoted{quotes: quotes} = s, memory) when quotes != [] do
     safe_idx = rem(abs(idx), length(quotes))
-    {:next_state, %Quoted{s | selected: Enum.at(quotes, safe_idx)}, data}
+    {:next, %Quoted{s | selected: Enum.at(quotes, safe_idx)}, memory}
   end
 
-  def handle_event(_, :bind, %Quoted{selected: sel}, data) when sel != nil do
-    {:next_state, %Bound{quote: sel, bound_at: :now}, data}
+  def turn(:bind, %Quoted{selected: sel}, memory) when sel != nil do
+    {:next, %Bound{quote: sel, bound_at: :now}, memory}
   end
 
-  def handle_event(_, :decline, %Quoted{}, data) do
-    {:next_state, %Declined{reason: :manual}, data}
+  def turn(:decline, %Quoted{}, memory) do
+    {:next, %Declined{reason: :manual}, memory}
   end
 
-  # --- note (any state, modifies data only) ---
-  def handle_event(_, :note, _state, data) do
-    {:keep_state, %{data | audit: [:note | data.audit]}}
+  # ── Any state ──
+  def turn(:note, _state, memory) do
+    {:stay, %{memory | audit: [:note | memory.audit]}}
   end
 
-  # --- noop (any state) ---
-  def handle_event(_, :noop, _state, _data) do
-    :keep_state_and_data
-  end
+  def turn(:noop, _state, _memory), do: :stay
 
-  # --- catch-all: total function ---
-  def handle_event(_, _event, _state, _data) do
-    :keep_state_and_data
-  end
-
-  @impl true
-  @spec on_enter(state(), state(), data()) :: Crank.on_enter_result()
-  def on_enter(old_state, new_state, data) do
-    {:keep_state, %{data | audit: [{:enter, old_state.__struct__, new_state.__struct__} | data.audit]}}
-  end
+  # Property-test affordance — see `Crank.Examples.Order` for the equivalent
+  # note. Production modules should let unhandled events raise.
+  def turn(_event, _state, _memory), do: :stay
 end
