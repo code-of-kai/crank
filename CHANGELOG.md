@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-04-22
+
+### Added
+
+- `Crank.Wants` — composable builder over `c:Crank.wants/2` tuple types. Pipe-friendly API (`new/0`, `timeout/3`, `timeout/4`, `cancel/2`, `send/3`, `telemetry/4`, `next/2`, `only_if/3`, `merge/2`) produces plain want lists without changing the wire format. Enables shared effect policies across machines.
+- `Crank.Turns` — Ecto.Multi analogue for state machines. Pure `%Crank.Turns{}` descriptor accumulates named turns against `%Crank{}` machines, with function-resolved dependencies on prior results. `Crank.Turns.apply/1` executes pure; best-effort sequential, returns `{:ok, results}` or `{:error, name, reason, advanced_so_far}`. `{:stopped_input, reason}` wraps pre-stopped inputs.
+- `Crank.Server.Turns` — process-mode executor for the same descriptor. Operates against pids, registered names, or `{name, node}` tuples via `Crank.Server.turn/2`. Uses monitor-based stop detection (`Process.monitor/1` + `:erlang.yield/0` + bounded `receive`) because `Process.alive?/1` is unreliable during `:gen_statem` termination cleanup. `{:server_exit, exit_reason}` wraps caught call exits.
+
+### Fixed
+
+- Typedoc for `{:send, dest, message}` now documents `dest :: pid() | atom() | {atom(), node()}`, matching `Kernel.send/2` and the Server's existing runtime behavior. No behavioral change.
+
 ## [1.0.0] - 2026-04-22
 
 Major breaking redesign: Crank is now opinionated Moore, not Mealy. Effects are declared on state arrival (`wants/2`), not on transitions. The API is smaller, the vocabulary is consistent across pure and process modes, and the Moore discipline is enforced structurally — `turn/3` cannot attach effects to edges because the return type has no actions field.
