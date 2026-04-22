@@ -19,7 +19,7 @@ defmodule Crank do
           {:after, non_neg_integer(), event :: term()}
           | {:after, name :: term(), non_neg_integer(), event :: term()}
           | {:cancel, name :: term()}
-          | {:send, dest :: pid() | atom(), message :: term()}
+          | {:send, dest :: pid() | atom() | {atom(), node()}, message :: term()}
           | {:telemetry, event_name :: [atom()], measurements :: map(), metadata :: map()}
           | {:next, event :: term()}
 
