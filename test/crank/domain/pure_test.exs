@@ -1,6 +1,8 @@
 defmodule Crank.Domain.PureTest do
   use ExUnit.Case, async: true
 
+  alias Crank.Domain.Pure
+
   describe "use Crank.Domain.Pure" do
     test "tags the module with a Boundary persisted attribute (type :strict)" do
       Code.eval_string("""
@@ -90,8 +92,10 @@ defmodule Crank.Domain.PureTest do
     end
 
     test "sets the @__crank_domain_pure__ marker attribute" do
+      probe = Crank.Domain.PureTest.MarkerProbe
+
       Code.eval_string("""
-      defmodule Crank.Domain.PureTest.MarkerProbe do
+      defmodule #{inspect(probe)} do
         use Crank.Domain.Pure
 
         def add(a, b), do: a + b
@@ -101,24 +105,24 @@ defmodule Crank.Domain.PureTest do
       end
       """)
 
-      assert Crank.Domain.PureTest.MarkerProbe.marker() == true
+      assert probe.marker() == true
     after
       :code.purge(Crank.Domain.PureTest.MarkerProbe)
       :code.delete(Crank.Domain.PureTest.MarkerProbe)
     end
 
     test "build_boundary_opts/1 builds the expected options (Crank auto-added to deps)" do
-      assert [type: :strict, deps: [Crank], exports: []] = Crank.Domain.Pure.build_boundary_opts([])
+      assert [type: :strict, deps: [Crank], exports: []] = Pure.build_boundary_opts([])
 
       assert [type: :strict, deps: [Crank, Foo], exports: [Bar]] =
-               Crank.Domain.Pure.build_boundary_opts(boundary_deps: [Foo], boundary_exports: [Bar])
+               Pure.build_boundary_opts(boundary_deps: [Foo], boundary_exports: [Bar])
 
       assert [type: :relaxed, deps: [Crank], exports: []] =
-               Crank.Domain.Pure.build_boundary_opts(type: :relaxed)
+               Pure.build_boundary_opts(type: :relaxed)
 
       # Crank is not duplicated when the user explicitly lists it
       assert [type: :strict, deps: [Crank], exports: []] =
-               Crank.Domain.Pure.build_boundary_opts(boundary_deps: [Crank])
+               Pure.build_boundary_opts(boundary_deps: [Crank])
     end
   end
 

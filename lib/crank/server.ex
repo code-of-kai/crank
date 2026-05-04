@@ -330,97 +330,12 @@ defmodule Crank.Server.Adapter do
   end
 
   defp call_turn_in_worker(data, event, state, timeout) do
-    %{module: module, memory: memory, resource_limits: limits} = data
-    parent = self()
-
-    fun = fn ->
-      # Apply heap cap on the worker process (where the actual work
-      # happens). The BEAM kills the process if it allocates beyond.
-      case Keyword.get(limits, :max_heap_size) do
-        nil ->
-          :ok
-
-        size when is_integer(size) ->
-          Process.flag(:max_heap_size, %{size: size, kill: true, error_logger: false})
-      end
-
-      # We catch and forward exceptions so the gen_statem can re-raise
-      # them with the correct context, instead of seeing them as `:exit`.
-      try do
-        {:ok, module.turn(event, state, memory)}
-      rescue
-        e -> {:raised, :error, e, __STACKTRACE__}
-      catch
-        kind, reason when kind in [:exit, :throw] ->
-          {:raised, kind, reason, __STACKTRACE__}
-      end
-    end
+    fun = build_worker_fun(data, event, state)
 
     case start_worker_task(fun) do
       {:ok, task} ->
-        case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
-          {:ok, {:ok, result}} ->
-            result
-
-          {:ok, {:raised, :error, exception, stacktrace}} ->
-            emit(:exception, %{
-              module: module,
-              state: state,
-              event: event,
-              memory: memory,
-              kind: :error,
-              reason: exception,
-              stacktrace: stacktrace
-            })
-
-            reraise exception, stacktrace
-
-          {:ok, {:raised, kind, reason, stacktrace}} when kind in [:exit, :throw] ->
-            emit(:exception, %{
-              module: module,
-              state: state,
-              event: event,
-              memory: memory,
-              kind: kind,
-              reason: reason,
-              stacktrace: stacktrace
-            })
-
-            :erlang.raise(kind, reason, stacktrace)
-
-          {:exit, {:killed, _stack}} ->
-            # Worker was killed by Process.flag(:max_heap_size, kill: true).
-            handle_resource_violation(parent, data, event, state, "CRANK_RUNTIME_001",
-              :max_heap_exceeded
-            )
-
-          {:exit, :killed} ->
-            handle_resource_violation(parent, data, event, state, "CRANK_RUNTIME_001",
-              :max_heap_exceeded
-            )
-
-          {:exit, reason} ->
-            # Other exit (e.g., supervisor ancestor died). Surface as exception
-            # telemetry and propagate.
-            emit(:exception, %{
-              module: module,
-              state: state,
-              event: event,
-              memory: memory,
-              kind: :exit,
-              reason: reason,
-              stacktrace: []
-            })
-
-            exit(reason)
-
-          nil ->
-            # Task.yield returned nil → timeout fired → Task.shutdown
-            # killed the worker. Mode B's defining signal.
-            handle_resource_violation(parent, data, event, state, "CRANK_RUNTIME_002",
-              {:turn_timeout, timeout}
-            )
-        end
+        outcome = Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill)
+        handle_worker_outcome(outcome, data, event, state, timeout)
 
       :saturated ->
         # Crank.TaskSupervisor has reached max_children. This is a
@@ -433,19 +348,91 @@ defmodule Crank.Server.Adapter do
     end
   end
 
+  defp build_worker_fun(%{module: module, memory: memory, resource_limits: limits}, event, state) do
+    fn ->
+      apply_worker_heap_cap(limits)
+
+      # We catch and forward exceptions so the gen_statem can re-raise
+      # them with the correct context, instead of seeing them as `:exit`.
+      try do
+        {:ok, module.turn(event, state, memory)}
+      rescue
+        e -> {:raised, :error, e, __STACKTRACE__}
+      catch
+        kind, reason when kind in [:exit, :throw] ->
+          {:raised, kind, reason, __STACKTRACE__}
+      end
+    end
+  end
+
+  defp apply_worker_heap_cap(limits) do
+    case Keyword.get(limits, :max_heap_size) do
+      nil ->
+        :ok
+
+      size when is_integer(size) ->
+        Process.flag(:max_heap_size, %{size: size, kill: true, error_logger: false})
+    end
+  end
+
+  defp handle_worker_outcome({:ok, {:ok, result}}, _data, _event, _state, _timeout), do: result
+
+  defp handle_worker_outcome({:ok, {:raised, :error, exception, stacktrace}}, data, event, state, _timeout) do
+    emit_worker_exception(data, event, state, :error, exception, stacktrace)
+    reraise exception, stacktrace
+  end
+
+  defp handle_worker_outcome({:ok, {:raised, kind, reason, stacktrace}}, data, event, state, _timeout)
+       when kind in [:exit, :throw] do
+    emit_worker_exception(data, event, state, kind, reason, stacktrace)
+    :erlang.raise(kind, reason, stacktrace)
+  end
+
+  defp handle_worker_outcome({:exit, {:killed, _stack}}, data, event, state, _timeout) do
+    # Worker was killed by Process.flag(:max_heap_size, kill: true).
+    handle_resource_violation(self(), data, event, state, "CRANK_RUNTIME_001", :max_heap_exceeded)
+  end
+
+  defp handle_worker_outcome({:exit, :killed}, data, event, state, _timeout) do
+    handle_resource_violation(self(), data, event, state, "CRANK_RUNTIME_001", :max_heap_exceeded)
+  end
+
+  defp handle_worker_outcome({:exit, reason}, data, event, state, _timeout) do
+    # Other exit (e.g., supervisor ancestor died). Surface as exception
+    # telemetry and propagate.
+    emit_worker_exception(data, event, state, :exit, reason, [])
+    exit(reason)
+  end
+
+  defp handle_worker_outcome(nil, data, event, state, timeout) do
+    # Task.yield returned nil → timeout fired → Task.shutdown
+    # killed the worker. Mode B's defining signal.
+    handle_resource_violation(self(), data, event, state, "CRANK_RUNTIME_002", {:turn_timeout, timeout})
+  end
+
+  defp emit_worker_exception(%{module: module, memory: memory}, event, state, kind, reason, stacktrace) do
+    emit(:exception, %{
+      module: module,
+      state: state,
+      event: event,
+      memory: memory,
+      kind: kind,
+      reason: reason,
+      stacktrace: stacktrace
+    })
+  end
+
   # Wrapper around Task.Supervisor.async_nolink. On OTP 26+ the success
   # path always returns `%Task{}`; saturation surfaces as a `:noproc` /
   # `{:max_children, _}` exit signal, which we trap here. The
   # tagged-tuple return shape was a historical OTP contract that no
   # longer fires on supported releases.
   defp start_worker_task(fun) do
-    try do
-      %Task{} = task = Task.Supervisor.async_nolink(Crank.TaskSupervisor, fun)
-      {:ok, task}
-    catch
-      :exit, {:noproc, _} -> :supervisor_down
-      :exit, reason -> if saturation_exit?(reason), do: :saturated, else: :erlang.raise(:exit, reason, __STACKTRACE__)
-    end
+    %Task{} = task = Task.Supervisor.async_nolink(Crank.TaskSupervisor, fun)
+    {:ok, task}
+  catch
+    :exit, {:noproc, _} -> :supervisor_down
+    :exit, reason -> if saturation_exit?(reason), do: :saturated, else: :erlang.raise(:exit, reason, __STACKTRACE__)
   end
 
   defp saturation_exit?(reason) do

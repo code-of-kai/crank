@@ -1,4 +1,8 @@
 defmodule Crank.WantsTest do
+  # credo:disable-for-this-file Credo.Check.Refactor.Apply
+  # The negative-path tests in this file deliberately use `apply/3` to
+  # bypass Elixir's compile-time argument warnings — the whole point of
+  # the test is to exercise the runtime guard.
   use ExUnit.Case, async: true
   doctest Crank.Wants
 

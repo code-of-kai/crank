@@ -126,6 +126,7 @@ defmodule Crank.PurityTrace do
   """
 
   alias Crank.Errors
+  alias Crank.PurityTrace.Coordinator
 
   @default_timeout 1_000
   @default_max_heap_size_bytes 10_000_000
@@ -180,7 +181,7 @@ defmodule Crank.PurityTrace do
     # callers — empirically, ~30% of trace events are dropped without
     # serialisation.
     session =
-      Crank.PurityTrace.Coordinator.exec(fn ->
+      Coordinator.exec(fn ->
         :trace.session_create(:crank_purity_trace, parent, [])
       end)
 
@@ -191,7 +192,7 @@ defmodule Crank.PurityTrace do
       # Step 4 — Attach the trace to the worker. `:arity` keeps trace
       # messages bounded — we want MFA identity, not arg values.
       _ =
-        Crank.PurityTrace.Coordinator.exec(fn ->
+        Coordinator.exec(fn ->
           :trace.process(session, worker, true, [:call, :arity])
         end)
 
@@ -205,7 +206,7 @@ defmodule Crank.PurityTrace do
     after
       # Step 7 — Cleanup is unconditional. session_destroy is idempotent.
       _ =
-        Crank.PurityTrace.Coordinator.exec(fn ->
+        Coordinator.exec(fn ->
           :trace.session_destroy(session)
         end)
     end
@@ -332,7 +333,7 @@ defmodule Crank.PurityTrace do
     # false-negative pure verdicts on the first call to a fresh module.
     _ = Code.ensure_loaded(mod)
 
-    Crank.PurityTrace.Coordinator.exec(fn ->
+    Coordinator.exec(fn ->
       :trace.function(session, {mod, :_, :_}, true, [])
     end)
   end
@@ -340,7 +341,7 @@ defmodule Crank.PurityTrace do
   defp set_pattern(session, {m, f, a}) when is_atom(m) and is_atom(f) do
     _ = Code.ensure_loaded(m)
 
-    Crank.PurityTrace.Coordinator.exec(fn ->
+    Coordinator.exec(fn ->
       :trace.function(session, {m, f, a}, true, [])
     end)
   end

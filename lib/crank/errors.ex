@@ -14,6 +14,7 @@ defmodule Crank.Errors do
   opts on test helpers).
   """
 
+  alias Crank.Errors.Catalog
   alias Crank.Errors.Violation
 
   # ── Pretty-printed form (humans, terminal, IDE) ─────────────────────────────
@@ -197,7 +198,7 @@ defmodule Crank.Errors do
   """
   @spec build(binary(), keyword()) :: Violation.t()
   def build(code, opts \\ []) when is_binary(code) do
-    entry = Crank.Errors.Catalog.fetch!(code)
+    entry = Catalog.fetch!(code)
 
     %Violation{
       code: code,

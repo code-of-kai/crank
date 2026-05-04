@@ -10,6 +10,8 @@ defmodule Crank.Generators do
 
   use ExUnitProperties
 
+  alias Crank.Examples.Order
+
   # ──────────────────────────────────────────────────────────────────────────
   # Level 1: Leaf generators
   # ──────────────────────────────────────────────────────────────────────────
@@ -84,7 +86,7 @@ defmodule Crank.Generators do
 
   @doc "A valid event for the Order machine."
   def order_event do
-    member_of(Crank.Examples.Order.events())
+    member_of(Order.events())
   end
 
   @doc "A random sequence of Order events."

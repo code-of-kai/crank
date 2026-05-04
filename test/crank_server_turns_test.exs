@@ -4,10 +4,10 @@ defmodule Crank.Server.TurnsTest do
   # deliberately cause server deaths.
   use ExUnit.Case, async: false
 
-  alias Crank.Turns
-  alias Crank.Server.Turns, as: ServerTurns
   alias Crank.Examples.Door
   alias Crank.Examples.VendingMachine
+  alias Crank.Server.Turns, as: ServerTurns
+  alias Crank.Turns
 
   # ──────────────────────────────────────────────────────────────────────────
   # Test fixtures — machines that exercise non-default turn results

@@ -12,6 +12,8 @@ defmodule Crank.MachineInvariantsTest do
 
   import Crank.Generators
 
+  alias Crank.Examples.Order
+
   @moduletag :property
 
   @runs 10_000
@@ -282,9 +284,9 @@ defmodule Crank.MachineInvariantsTest do
 
   property "Order state is always in the declared state set" do
     check all(events <- order_event_sequence(@seq), max_runs: @runs) do
-      Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
+      Enum.reduce(events, Crank.new(Order), fn event, m ->
         new_m = Crank.turn(m, event)
-        assert new_m.state in Crank.Examples.Order.states()
+        assert new_m.state in Order.states()
         new_m
       end)
     end
@@ -293,7 +295,7 @@ defmodule Crank.MachineInvariantsTest do
   property "Order wants matches the state it's in" do
     check all(events <- order_event_sequence(@seq), max_runs: @runs) do
       machine =
-        Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
+        Enum.reduce(events, Crank.new(Order), fn event, m ->
           Crank.turn(m, event)
         end)
 
@@ -303,7 +305,7 @@ defmodule Crank.MachineInvariantsTest do
           :ok
 
         wants ->
-          assert wants == Crank.Examples.Order.wants(machine.state, machine.memory)
+          assert wants == Order.wants(machine.state, machine.memory)
       end
     end
   end
@@ -315,7 +317,7 @@ defmodule Crank.MachineInvariantsTest do
             max_runs: @runs
           ) do
       machine =
-        Enum.reduce(pre ++ [:cancel], Crank.new(Crank.Examples.Order), fn event, m ->
+        Enum.reduce(pre ++ [:cancel], Crank.new(Order), fn event, m ->
           Crank.turn(m, event)
         end)
 
@@ -329,11 +331,11 @@ defmodule Crank.MachineInvariantsTest do
   property "Order pure/process equivalence" do
     check all(events <- order_event_sequence(100), max_runs: @runs) do
       pure =
-        Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
+        Enum.reduce(events, Crank.new(Order), fn event, m ->
           Crank.turn(m, event)
         end)
 
-      {:ok, pid} = Crank.Server.start_link(Crank.Examples.Order, [])
+      {:ok, pid} = Crank.Server.start_link(Order, [])
       Enum.each(events, &Crank.Server.cast(pid, &1))
 
       {process_state, %Crank.Server.Adapter{memory: process_memory}} = :sys.get_state(pid)
@@ -350,7 +352,7 @@ defmodule Crank.MachineInvariantsTest do
   property "Order determinism across complex event sequences" do
     check all(events <- order_event_sequence(@seq), max_runs: @runs) do
       run = fn ->
-        Enum.reduce(events, Crank.new(Crank.Examples.Order), fn event, m ->
+        Enum.reduce(events, Crank.new(Order), fn event, m ->
           Crank.turn(m, event)
         end)
       end
@@ -368,7 +370,7 @@ defmodule Crank.MachineInvariantsTest do
   # Submission machine properties (struct-per-state)
   # ──────────────────────────────────────────────────────────────────────────
 
-  alias Crank.Examples.Submission.{Validating, Quoted, Bound, Declined}
+  alias Crank.Examples.Submission.{Bound, Declined, Quoted, Validating}
 
   @submission_structs [Validating, Quoted, Bound, Declined]
 

@@ -185,31 +185,7 @@ defmodule Crank.Suppressions do
 
     case reason_result do
       {:ok, reason} ->
-        case consume_target_line(after_reason, annotation_line, @max_lookahead) do
-          {:ok, suppressed_line, remaining} ->
-            with {:ok, validated_codes} <- validate_codes(codes, annotation_line) do
-              suppression = %{
-                codes: MapSet.new(validated_codes),
-                reason: reason,
-                annotation_line: annotation_line,
-                suppressed_line: suppressed_line
-              }
-
-              {:ok, suppression, remaining}
-            else
-              {:meta, meta_list} ->
-                {:meta_violations, meta_list, after_reason}
-            end
-
-          :not_found ->
-            meta = %{
-              code: "CRANK_META_003",
-              line: annotation_line,
-              message: "# crank-allow: annotation has no following code line within #{@max_lookahead} lines"
-            }
-
-            {:meta_violations, [meta], after_reason}
-        end
+        finalize_with_reason(reason, after_reason, annotation_line, codes)
 
       :missing ->
         meta = %{
@@ -219,6 +195,39 @@ defmodule Crank.Suppressions do
         }
 
         {:meta_violations, [meta], after_reason}
+    end
+  end
+
+  defp finalize_with_reason(reason, after_reason, annotation_line, codes) do
+    case consume_target_line(after_reason, annotation_line, @max_lookahead) do
+      {:ok, suppressed_line, remaining} ->
+        build_suppression(codes, reason, annotation_line, suppressed_line, remaining, after_reason)
+
+      :not_found ->
+        meta = %{
+          code: "CRANK_META_003",
+          line: annotation_line,
+          message: "# crank-allow: annotation has no following code line within #{@max_lookahead} lines"
+        }
+
+        {:meta_violations, [meta], after_reason}
+    end
+  end
+
+  defp build_suppression(codes, reason, annotation_line, suppressed_line, remaining, after_reason) do
+    case validate_codes(codes, annotation_line) do
+      {:ok, validated_codes} ->
+        suppression = %{
+          codes: MapSet.new(validated_codes),
+          reason: reason,
+          annotation_line: annotation_line,
+          suppressed_line: suppressed_line
+        }
+
+        {:ok, suppression, remaining}
+
+      {:meta, meta_list} ->
+        {:meta_violations, meta_list, after_reason}
     end
   end
 

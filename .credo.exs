@@ -46,10 +46,11 @@
       #
       plugins: [],
       #
-      # If you create your own checks, you must specify the source files for
-      # them here, so they can be loaded by Credo before running the analysis.
-      #
-      requires: ["lib/crank/check/turn_purity.ex"],
+      # `Crank.Check.TurnPurity` is part of the compiled `:crank` lib, so
+      # Credo discovers it automatically via the loaded application — no
+      # `requires:` entry needed here. Downstream projects depending on
+      # `:crank` get the check the same way.
+      requires: [],
       #
       # If you want to enforce a style guide and need a more traditional linting
       # experience, you can change `strict` to `true` below:

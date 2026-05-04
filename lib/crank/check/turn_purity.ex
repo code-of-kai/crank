@@ -4,7 +4,11 @@
 # because `Credo.Check` is not loaded. The `@before_compile` hook in
 # `Crank.Check.CompileTime` covers the same ground at compile time and is
 # always available regardless of Credo's presence.
-if Code.ensure_loaded?(Credo.Check) do
+#
+# Skip the second condition during a re-load (e.g. when Credo's own scan
+# requires this file at runtime); without it the BEAM emits a "redefining
+# module" warning every `mix credo` run.
+if Code.ensure_loaded?(Credo.Check) and not Code.ensure_loaded?(Crank.Check.TurnPurity) do
   defmodule Crank.Check.TurnPurity do
     @moduledoc """
     Credo check that flags impure calls inside `turn/3` clause bodies.
@@ -41,10 +45,10 @@ if Code.ensure_loaded?(Credo.Check) do
         """
       ]
 
-    alias Credo.IssueMeta
     alias Crank.Check.Blacklist
     alias Crank.Errors
     alias Crank.Suppressions
+    alias Credo.IssueMeta
 
     @impl Credo.Check
     def run(%SourceFile{} = source_file, params) do
@@ -107,29 +111,7 @@ if Code.ensure_loaded?(Credo.Check) do
         Macro.prewalk(ast, [], fn node, acc ->
           case Blacklist.match_call(node) do
             {:violation, code, message, doc_url} ->
-              line = call_line(node)
-
-              violation =
-                Errors.build(code,
-                  location: %{file: source_file.filename, line: line},
-                  fix_category: message
-                )
-
-              if Suppressions.suppressed?(violation, suppressions) do
-                # Layer A suppression: emit telemetry, drop the issue.
-                suppression = Map.get(suppressions, line)
-                if suppression, do: Suppressions.emit_suppression_telemetry(violation, suppression)
-                {node, acc}
-              else
-                issue =
-                  format_issue(issue_meta,
-                    message: "[#{code}] #{message}",
-                    line_no: line,
-                    trigger: trigger_text(node, doc_url)
-                  )
-
-                {node, [issue | acc]}
-              end
+              {node, accumulate(node, code, message, doc_url, acc, source_file, suppressions, issue_meta)}
 
             nil ->
               {node, acc}
@@ -137,6 +119,26 @@ if Code.ensure_loaded?(Credo.Check) do
         end)
 
       Enum.reverse(issues)
+    end
+
+    defp accumulate(node, code, message, doc_url, acc, source_file, suppressions, issue_meta) do
+      line = call_line(node)
+      violation = Errors.build(code, location: %{file: source_file.filename, line: line}, fix_category: message)
+
+      if Suppressions.suppressed?(violation, suppressions) do
+        suppression = Map.get(suppressions, line)
+        if suppression, do: Suppressions.emit_suppression_telemetry(violation, suppression)
+        acc
+      else
+        issue =
+          format_issue(issue_meta,
+            message: "[#{code}] #{message}",
+            line_no: line,
+            trigger: trigger_text(node, doc_url)
+          )
+
+        [issue | acc]
+      end
     end
 
     defp call_line({{:., meta, _}, _, _}), do: meta[:line]

@@ -2,8 +2,8 @@ defmodule Crank.TurnsTest do
   use ExUnit.Case, async: true
   doctest Crank.Turns
 
-  alias Crank.Turns
   alias Crank.Examples.Door
+  alias Crank.Turns
 
   # ──────────────────────────────────────────────────────────────────────────
   # Test fixtures — machines that exercise non-default turn results
