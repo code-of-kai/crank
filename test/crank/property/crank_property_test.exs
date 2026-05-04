@@ -1,7 +1,11 @@
-defmodule Crank.PropertyTest do
+defmodule Crank.MachineInvariantsTest do
   @moduledoc """
   Property-based tests for Crank. ~60M random turns across the suite.
   Fixtures are local; global examples live in `test/support/examples.ex`.
+
+  This module name avoids collision with `Crank.PropertyTest` — the public
+  helper module (Phase 2.3) that bridges `Crank.PurityTrace` with StreamData
+  for user-facing purity property tests.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties

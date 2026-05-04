@@ -25,7 +25,8 @@ defmodule Crank.Application do
     :ok = check_otp_version!()
 
     children = [
-      {Task.Supervisor, name: Crank.TaskSupervisor, max_children: 10_000}
+      {Task.Supervisor, name: Crank.TaskSupervisor, max_children: 10_000},
+      Crank.PurityTrace.Coordinator
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Crank.Supervisor)
