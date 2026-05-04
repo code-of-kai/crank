@@ -12,8 +12,26 @@
 | 2. OTP guard | `0df893d` | `Crank.Application` boots with OTP 26+ check (`CRANK_SETUP_002` if older), starts `Crank.TaskSupervisor` for Mode B worker tasks |
 | 4. Static checks | `ecc0618` | `Crank.Check.TurnPurity` (Credo) and `Crank.Check.CompileTime` (`@before_compile`) wired into `use Crank`. Hard `CompileError` on impure calls in `turn/3`. `# crank-allow:` suppression honoured. |
 | 8. Server resource limits | `62fd91d` | `Crank.Server.start_link/3` accepts `:resource_limits`. Mode A applies `:max_heap_size` to gen_statem; Mode B (`turn_timeout` set) spawns workers under `Crank.TaskSupervisor` with kill-on-timeout. Verified against non-yielding tight loop. |
+| 5. Topology | `e8da511` | `Crank.BoundaryIntegration` translates Boundary errors → `CRANK_DEP_001/002/003`. `Crank.Domain.Pure` macro tags helpers as strict `:domain` boundaries. `Mix.Tasks.Compile.Crank` (`:crank` compiler) wraps Boundary's machinery and emits Crank-formatted diagnostics. `priv/boundary.exs.template` ships the third-party-app classification starter config. End-to-end integration test (`test/integration/dep_001_test.exs`) stages a consumer mix project and asserts `CRANK_DEP_001` fires on a domain→infra reference. |
+| 6. State/memory typing | `505d1ad` | `Crank.__using__/1` accepts `states: [...]` and `memory: ...`. Generates `@type state/0` (closed union) and `@type memory/0` automatically. `Crank.Typing` provides `@before_compile` for `CRANK_TYPE_003` (literal `{:next, %SomeState{}, _}` returns must be in declared union) and `@after_compile` for `CRANK_TYPE_002` (rejects `function/0` / `module/0` types in memory typespec via `Code.Typespec.fetch_types/1`, with best-effort skip-on-unfetchable for same-pass compilation order). |
 
-**Test status:** 245 tests passing on `main`. No regressions.
+**Test status:** 292 tests passing on `main` (was 245; +29 from Stage 5 boundary tests, +18 from Stage 6 typing tests, including 2 new integration tests under `test/integration/`).
+
+### Phase 0 outcome — passed
+
+The Boundary feasibility spike validated the integration design without requiring redesign. Key findings:
+
+1. **`use Boundary` macro composition works.** Both `use Crank` and `use Crank.Domain.Pure` successfully inject `use Boundary, type: :strict, deps: [...], exports: []` via `Crank.Domain.Pure.build_boundary_opts/1`. The `Boundary` persisted module attribute is set correctly on every tagged module; verified via the generic test pattern `Keyword.get(module.__info__(:attributes), Boundary)`.
+
+2. **Diagnostic translation has all required fields.** `Crank.BoundaryIntegration.translate_error/2` produces `Crank.Errors.Violation` structs with code, severity, rule, file, line, function, violating_call, context, and metadata fully populated from Boundary's `{:invalid_reference, %{from_boundary, to_boundary, reference: %{from, to, file, line, from_function}}}` shape.
+
+3. **The starter Boundary config in `priv/boundary.exs.template` is reusable** without modification. Third-party app classification operates at the OTP-application level (per the v6 plan correction), so the template seeds `:third_party_pure` and `:third_party_impure` lists with commented-out suggestions only. No stdlib classification (handled by 1.1 / 1.3 / 2.1 instead).
+
+4. **Implementation gotcha discovered during the spike:** `Crank.__using__/1` must auto-add `Crank` to the user's `boundary_deps` list. Without this, the strict-mode external-dep check fires on the macro-injected references to `Crank.Server`, `Crank.Check.CompileTime`, etc., producing spurious `CRANK_DEP_003` errors on every `use Crank` module. The fix is a single line in `Crank.Domain.Pure.build_boundary_opts/1` — Crank is prepended to `:deps` if not already present. Tested via `boundary_deps: [Crank]` opt being a no-op for users.
+
+5. **Boundary's `after_elixir_compiler` semantics matter.** Boundary's own compiler hook only unloads the tracer, NOT flushes CompilerState. An initial draft of `Mix.Tasks.Compile.Crank` flushed state in `after_elixir`, which wiped the captured references before `after_app` could query them. Fixed; the integration test catches this regression.
+
+The spike's three pass criteria (CRANK_DEP_001 with full fields, config reusable as Stage 5 template, macro mechanism compatible with both `use Crank` and `use Crank.Domain.Pure`) are met. No redesign of Phase 1.4 was required.
 
 ### Remaining work, by track
 
