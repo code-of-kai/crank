@@ -121,7 +121,7 @@ After each `turn/2`, the returned `%Crank{}` has five fields:
 {:stop, reason, new_memory}        # shut down the machine
 ```
 
-No action tuples. No effects. `turn/3` is pure state computation; this is the structural enforcement of the Moore discipline.
+No action tuples. No effects. `turn/3` is pure state computation; this is the structural enforcement of the Moore discipline. For how these return values connect to UML transition theory — trigger, guard, effect, source state — see the [Transitions and guards guide](guides/transitions-and-guards.md).
 
 ## Want types
 
@@ -201,7 +201,7 @@ def turn({:select, item}, %Accepting{balance: b}, memory) when b >= memory.price
 end
 ```
 
-State-specific data lives in the struct. Cross-cutting concerns live in `memory`. Elixir's set-theoretic type system will eventually check these unions at compile time; `Crank.Examples.Submission` is designed for that.
+State-specific data lives in the struct. Cross-cutting concerns live in `memory`. Elixir's set-theoretic type system will eventually check these unions at compile time; `Crank.Examples.Submission` is designed for that. The `when b >= memory.price` guard in the example above is a UML guard in Elixir clothing — see the [Transitions and guards guide](guides/transitions-and-guards.md) for the full treatment.
 
 ## Telemetry
 
