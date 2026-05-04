@@ -1,0 +1,57 @@
+# Starter Boundary configuration for a Crank-using project.
+#
+# This file is written into your project by `mix crank.gen.config`. It
+# defines the third-party app classifications Crank's topology layer
+# (Phase 1.4 of `purity-enforcement.md`) uses to distinguish allowed
+# pure dependencies from rejected infrastructure dependencies.
+#
+# How Boundary classification works in Crank:
+#
+#   * Modules tagged `use Crank` or `use Crank.Domain.Pure` belong to
+#     the `:domain` boundary type (strict by default).
+#   * Other first-party modules are unclassified — calls from `:domain`
+#     to them produce `CRANK_DEP_002` ("unmarked first-party helper").
+#   * Third-party OTP apps must be explicitly classified below. Calls
+#     from `:domain` to a third-party app NOT in either list produce
+#     `CRANK_DEP_003` ("unclassified-external-dep").
+#   * Stdlib modules (`Map`, `Enum`, `Decimal` etc.) are NOT enforced by
+#     Boundary. The call-site blacklist (1.1 / 1.3) and runtime trace
+#     (2.1) handle stdlib purity at the function level.
+#
+# Edit the lists below to match your project. Uncomment the suggestions
+# you actually use; comment out anything you do not. New deps you add
+# later need their own classification — `mix crank.check` will tell you
+# which ones are missing via `CRANK_DEP_003`.
+
+[
+  # OTP apps whose modules are pure enough to call from `:domain`.
+  third_party_pure: [
+    # :decimal,
+    # :money,
+    # :typed_struct,
+    # :nimble_parsec,
+    # :stream_data,
+    # :telemetry
+  ],
+
+  # OTP apps whose modules are infrastructure — calls from `:domain`
+  # should fail. Effects belong behind `wants/2`, not in domain code.
+  third_party_impure: [
+    # :ecto,
+    # :ecto_sql,
+    # :postgrex,
+    # :myxql,
+    # :tds,
+    # :httpoison,
+    # :tesla,
+    # :finch,
+    # :req,
+    # :swoosh,
+    # :bamboo,
+    # :oban,
+    # :phoenix,
+    # :phoenix_html,
+    # :phoenix_live_view,
+    # :plug
+  ]
+]

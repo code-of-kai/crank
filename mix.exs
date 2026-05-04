@@ -33,6 +33,7 @@ defmodule Crank.MixProject do
   defp deps do
     [
       {:telemetry, "~> 1.0"},
+      {:boundary, "~> 0.10"},
       {:stream_data, "~> 1.1", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},

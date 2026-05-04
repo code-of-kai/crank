@@ -92,8 +92,16 @@ defmodule Crank do
   # ──────────────────────────────────────────────────────────────────────────
 
   defmacro __using__(opts) do
+    boundary_opts = Crank.Domain.Pure.build_boundary_opts(opts)
+
     quote location: :keep do
       @behaviour Crank
+
+      # Topology layer (Phase 1.4): tag this module as a `:domain` Boundary
+      # so the post-compile graph check (via `Mix.Tasks.Compile.Crank` →
+      # Boundary) rejects cross-boundary references to infrastructure modules.
+      # See `Crank.Domain.Pure` for the parallel marker for non-FSM helpers.
+      use Boundary, unquote(boundary_opts)
 
       # Compile-time purity enforcement: capture turn/3 clause bodies as they
       # are defined, then walk them in @before_compile to flag impure calls.
