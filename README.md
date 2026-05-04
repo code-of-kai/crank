@@ -320,6 +320,7 @@ end
 - [DESIGN.md](DESIGN.md) — Full specification and design rationale.
 - [Composing Work guide](guides/composing-work.md) — `Crank.Wants`, `Crank.Turns`, multi-machine work.
 - [Hexagonal Architecture guide](guides/hexagonal-architecture.md) — Persistence, notifications, audit logging.
+- [Transitions and guards guide](guides/transitions-and-guards.md) — How UML statechart transitions map to `turn/3` clauses and `when` guards.
 - [CHANGELOG.md](CHANGELOG.md) — Version history.
 
 ## License
