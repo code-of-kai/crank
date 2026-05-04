@@ -78,7 +78,7 @@ The inbound ports are `turn/3` (advance) and `reading/2` (observe). The outbound
 
 The domain model doesn't know who's listening or what they do. It just declares what happened.
 
-`turn/3` must never contain side effects. The moment `turn/3` calls `Repo.insert!`, the domain model requires a database to run. The moment it calls `Mailer.send`, tests send emails. The boundary is broken. The type system helps: `turn/3`'s return is pure state — there's no return shape that admits a side effect. The same guarantee extends to `when` guards: the BEAM's guard allowlist rejects database calls and sends at compile time, and contains crashes at runtime. See the [Transitions and guards guide](transitions-and-guards.md) for the mechanism.
+`turn/3` must never contain side effects. The moment `turn/3` calls `Repo.insert!`, the domain model requires a database to run. The moment it calls `Mailer.send`, tests send emails. The boundary is broken. Nothing in the compiler stops you — this is a discipline the architecture requires, not one Elixir enforces. The return type helps as a signal: there is no return shape that admits a declared side effect, so any effect in the body is immediately suspicious. `when` guards are a different story: the BEAM's allowlist rejects database calls and sends at compile time, and contains crashes at runtime — purity there is structurally enforced, not conventional. See the [Transitions and guards guide](transitions-and-guards.md) for the mechanism.
 
 ## Every state change emits a domain event
 
