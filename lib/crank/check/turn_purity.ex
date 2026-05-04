@@ -1,4 +1,16 @@
 defmodule Crank.Check.TurnPurity do
+  @moduledoc """
+  Credo check that flags impure calls inside `turn/3` clause bodies.
+
+  Warning-level early signal — runs at editor save time / `mix credo` time.
+  The `@before_compile` hook in `Crank.Check.CompileTime` covers the same
+  ground at compile time and produces hard `CompileError`s; both share the
+  blacklist via `Crank.Check.Blacklist`.
+
+  Suppression: source-adjacent `# crank-allow:` comments (Layer A; see
+  `Crank.Suppressions`).
+  """
+
   use Credo.Check,
     base_priority: :high,
     category: :design,
@@ -13,99 +25,116 @@ defmodule Crank.Check.TurnPurity do
 
       See the Hexagonal Architecture guide for the boundary contract, and the
       Transitions and guards guide for what `turn/3` clauses should contain.
-      """,
-      params: [
-        impure_modules: """
-        Module name prefixes considered impure. Any call whose receiver starts
-        with one of these prefixes inside a `turn/3` body raises an issue.
-        Defaults to common infrastructure namespaces; extend in `.credo.exs`.
-        """
-      ]
-    ],
-    param_defaults: [
-      impure_modules: ~w(
-        Repo
-        Ecto
-        HTTPoison
-        Tesla
-        Finch
-        Req
-        Swoosh
-        Bamboo
-        Mailer
-        Oban
-      )
+
+      To suppress a specific instance with reason:
+
+          # crank-allow: CRANK_PURITY_004
+          # reason: dev-only debug timestamp; never reached in production
+          @debug_now DateTime.utc_now()
+      """
     ]
 
-  alias Credo.Code
   alias Credo.IssueMeta
+  alias Crank.Check.Blacklist
+  alias Crank.Errors
+  alias Crank.Suppressions
 
   @impl Credo.Check
   def run(%SourceFile{} = source_file, params) do
-    impure_prefixes = Params.get(params, :impure_modules, __MODULE__)
-    Code.prewalk(source_file, &traverse(&1, &2, impure_prefixes, source_file, params))
+    issue_meta = IssueMeta.for(source_file, params)
+    source = SourceFile.source(source_file)
+    {suppressions, _meta} = Suppressions.parse(source)
+
+    source_file
+    |> Credo.Code.prewalk(&visit(&1, &2, source_file, suppressions, issue_meta))
   end
 
-  # Only inspect defmodule blocks that use Crank.
-  defp traverse({:defmodule, _, [_name, [do: body]]} = ast, issues, prefixes, source_file, params) do
+  # ── Visitor ───────────────────────────────────────────────────────────────
+
+  # Only inspect defmodule blocks that `use Crank`.
+  defp visit({:defmodule, _meta, [_name, [do: body]]} = ast, issues, source_file, suppressions, issue_meta) do
     if uses_crank?(body) do
-      new_issues = collect_turn_issues(body, prefixes, source_file, params)
+      new_issues = collect_turn_issues(body, source_file, suppressions, issue_meta)
       {ast, issues ++ new_issues}
     else
       {ast, issues}
     end
   end
 
-  defp traverse(ast, issues, _prefixes, _source_file, _params), do: {ast, issues}
+  defp visit(ast, issues, _source_file, _suppressions, _issue_meta), do: {ast, issues}
 
-  # Check whether the module body contains `use Crank`.
+  # ── `use Crank` detector ──────────────────────────────────────────────────
+
   defp uses_crank?({:__block__, _, stmts}), do: Enum.any?(stmts, &uses_crank?/1)
   defp uses_crank?({:use, _, [{:__aliases__, _, [:Crank]} | _]}), do: true
+  defp uses_crank?({:use, _, [{:__aliases__, _, [:Crank, :Domain, :Pure]} | _]}), do: true
   defp uses_crank?(_), do: false
 
-  # Walk all `def turn(_, _, _)` clauses and scan their bodies.
-  defp collect_turn_issues({:__block__, _, stmts}, prefixes, source_file, params) do
-    Enum.flat_map(stmts, &collect_turn_issues(&1, prefixes, source_file, params))
+  # ── `turn/3` clause walker ────────────────────────────────────────────────
+
+  defp collect_turn_issues({:__block__, _, stmts}, source_file, suppressions, issue_meta) do
+    Enum.flat_map(stmts, &collect_turn_issues(&1, source_file, suppressions, issue_meta))
   end
 
-  defp collect_turn_issues({:def, _meta, [{:turn, _, args}, [do: body]]}, prefixes, source_file, params)
+  defp collect_turn_issues({:def, _meta, [{:turn, _, args}, [do: body]]}, source_file, suppressions, issue_meta)
        when length(args) == 3 do
-    find_impure_calls(body, prefixes, source_file, params)
+    find_impure_calls(body, source_file, suppressions, issue_meta)
   end
 
-  defp collect_turn_issues(_, _prefixes, _source_file, _params), do: []
+  # Also walk `def` clauses inside `Crank.Domain.Pure` modules (every public
+  # function in a domain-pure module is subject to the same blacklist).
+  defp collect_turn_issues({:def, _meta, [{_fun, _, _args}, [do: body]]}, source_file, suppressions, issue_meta) do
+    if Process.get(:__crank_domain_pure_walk__, false) do
+      find_impure_calls(body, source_file, suppressions, issue_meta)
+    else
+      []
+    end
+  end
 
-  # Recursively scan an AST node for calls to impure modules.
-  defp find_impure_calls(ast, prefixes, source_file, params) do
+  defp collect_turn_issues(_, _source_file, _suppressions, _issue_meta), do: []
+
+  # ── Per-call AST walk ─────────────────────────────────────────────────────
+
+  defp find_impure_calls(ast, source_file, suppressions, issue_meta) do
     {_, issues} =
       Macro.prewalk(ast, [], fn node, acc ->
-        case impure_call(node, prefixes) do
-          {module, fun, line} ->
-            issue =
-              format_issue(
-                IssueMeta.for(source_file, params),
-                message: "Impure call `#{module}.#{fun}` inside `turn/3`. Move side effects to a telemetry adapter or declare them in `wants/2`.",
-                line_no: line
+        case Blacklist.match_call(node) do
+          {:violation, code, message, doc_url} ->
+            line = call_line(node)
+
+            violation =
+              Errors.build(code,
+                location: %{file: source_file.filename, line: line},
+                fix_category: message
               )
 
-            {node, [issue | acc]}
+            if Suppressions.suppressed?(violation, suppressions) do
+              # Layer A suppression: emit telemetry, drop the issue.
+              suppression = Map.get(suppressions, line)
+              if suppression, do: Suppressions.emit_suppression_telemetry(violation, suppression)
+              {node, acc}
+            else
+              issue =
+                format_issue(issue_meta,
+                  message: "[#{code}] #{message}",
+                  line_no: line,
+                  trigger: trigger_text(node, doc_url)
+                )
+
+              {node, [issue | acc]}
+            end
 
           nil ->
             {node, acc}
         end
       end)
 
-    issues
+    Enum.reverse(issues)
   end
 
-  # Match a remote call whose receiver module starts with a known-impure prefix.
-  defp impure_call({{:., meta, [{:__aliases__, _, mod_parts}, fun]}, _, _args}, prefixes) do
-    module = Enum.join(mod_parts, ".")
+  defp call_line({{:., meta, _}, _, _}), do: meta[:line]
+  defp call_line({_fun, meta, _args}) when is_list(meta), do: meta[:line]
+  defp call_line(_), do: nil
 
-    if Enum.any?(prefixes, &String.starts_with?(module, &1)) do
-      {module, fun, meta[:line]}
-    end
-  end
-
-  defp impure_call(_ast, _prefixes), do: nil
+  defp trigger_text(_node, doc_url), do: "see #{doc_url}"
 end

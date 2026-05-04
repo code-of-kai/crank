@@ -95,6 +95,13 @@ defmodule Crank do
     quote location: :keep do
       @behaviour Crank
 
+      # Compile-time purity enforcement: capture turn/3 clause bodies as they
+      # are defined, then walk them in @before_compile to flag impure calls.
+      # Suppression honours # crank-allow: comments per Crank.Suppressions.
+      @on_definition Crank.Check.CompileTime
+      @before_compile Crank.Check.CompileTime
+      Module.register_attribute(__MODULE__, :__crank_turn_bodies__, accumulate: false)
+
       def child_spec(args) do
         %{
           id: __MODULE__,
