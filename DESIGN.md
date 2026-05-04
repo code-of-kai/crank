@@ -189,4 +189,17 @@ Elixir's set-theoretic type system (introduced in v1.17, with inference expandin
   Idle.t() | Accepting.t() | Dispensing.t() | MakingChange.t() | OutOfStock.t()
 ```
 
-When the compiler can check this, unhandled variants in `turn/3` will produce warnings with zero code changes. `Crank.Examples.Submission` is written with this in mind.
+When the compiler can check this, unhandled variants in `turn/3` will produce warnings with zero code changes. `Crank.Examples.Submission` is written with this in mind. The macro form `use Crank, states: [...]` already declares the closed union; see the [typing-state-and-memory guide](guides/typing-state-and-memory.md) for how the macro form interacts with the future exhaustiveness check.
+
+## Layered enforcement
+
+The pure-core property is enforced by a layered system rather than a single check. Each layer catches a different category of violation, and the categories are documented as a detection matrix rather than as a uniform claim of soundness.
+
+- **Static call-site checks** — Credo (warning) and `@before_compile` (hard `CompileError`) walk every `turn/3` clause body and reject calls to known-impure modules. Shared blacklist lives in `Crank.Check.Blacklist`.
+- **Static topology checks** — [Boundary](https://github.com/sasa1977/boundary) post-compile graph check rejects domain-module → infrastructure-module references. Wired automatically by `mix crank.gen.config`.
+- **Runtime tracing** — `Crank.PurityTrace` runs `turn/3` in an isolated trace session (OTP 26+) and observes any blacklist match anywhere in the dynamic call graph. `Crank.PropertyTest.assert_pure_turn/3` integrates this with StreamData so every property test becomes a purity test.
+- **Type-level checks** — Closed state unions and tightly-typed memory structs activate native Elixir field-name validation (today) and Dialyzer warnings (today) and set-theoretic exhaustiveness (when the language work lands).
+
+All four feed the same error-reporting pipeline (`Crank.Errors`) with stable codes and per-code doc pages. Suppression is layer-specific (source comments for AST checks, Boundary config for topology, programmatic `:allow` opt for runtime trace) — see the [Suppressions guide](guides/suppressions.md).
+
+The full detection matrix, non-detectable classes, and forward-looking gaps are documented in `plans/purity-enforcement.md` and the [ROADMAP](ROADMAP.md).

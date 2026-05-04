@@ -48,7 +48,7 @@ defmodule Crank.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
-      files: ~w(lib guides assets .formatter.exs mix.exs README.md LICENSE CHANGELOG.md DESIGN.md)
+      files: ~w(lib guides assets .formatter.exs mix.exs README.md LICENSE CHANGELOG.md DESIGN.md ROADMAP.md)
     ]
   end
 
@@ -61,10 +61,40 @@ defmodule Crank.MixProject do
         "guides/composing-work.md",
         "guides/hexagonal-architecture.md",
         "guides/transitions-and-guards.md",
+        "guides/typing-state-and-memory.md",
+        "guides/property-testing.md",
+        "guides/boundary-setup.md",
+        "guides/suppressions.md",
+        "guides/violations/index.md",
+        "guides/violations/CRANK_PURITY_001.md",
+        "guides/violations/CRANK_PURITY_002.md",
+        "guides/violations/CRANK_PURITY_003.md",
+        "guides/violations/CRANK_PURITY_004.md",
+        "guides/violations/CRANK_PURITY_005.md",
+        "guides/violations/CRANK_PURITY_006.md",
+        "guides/violations/CRANK_PURITY_007.md",
+        "guides/violations/CRANK_DEP_001.md",
+        "guides/violations/CRANK_DEP_002.md",
+        "guides/violations/CRANK_DEP_003.md",
+        "guides/violations/CRANK_TYPE_001.md",
+        "guides/violations/CRANK_TYPE_002.md",
+        "guides/violations/CRANK_TYPE_003.md",
+        "guides/violations/CRANK_RUNTIME_001.md",
+        "guides/violations/CRANK_RUNTIME_002.md",
+        "guides/violations/CRANK_TRACE_001.md",
+        "guides/violations/CRANK_TRACE_002.md",
+        "guides/violations/CRANK_META_001.md",
+        "guides/violations/CRANK_META_002.md",
+        "guides/violations/CRANK_META_003.md",
+        "guides/violations/CRANK_META_004.md",
+        "guides/violations/CRANK_SETUP_001.md",
+        "guides/violations/CRANK_SETUP_002.md",
         "CHANGELOG.md",
-        "DESIGN.md"
+        "DESIGN.md",
+        "ROADMAP.md"
       ],
       groups_for_extras: [
+        Violations: ~r/guides\/violations\/.*/,
         Guides: ~r/guides\/.*/
       ]
     ]

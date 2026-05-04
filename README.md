@@ -322,6 +322,17 @@ end
 - [Hexagonal Architecture guide](guides/hexagonal-architecture.md) — Persistence, notifications, audit logging.
 - [Transitions and guards guide](guides/transitions-and-guards.md) — How UML statechart transitions map to `turn/3` clauses and `when` guards.
 - [CHANGELOG.md](CHANGELOG.md) — Version history.
+- [ROADMAP.md](ROADMAP.md) — Forward-looking work and known gaps.
+
+### Purity enforcement
+
+Crank ships a layered enforcement system that keeps `turn/3` pure: compile-time call-site checks, post-compile topology checks (via [Boundary](https://github.com/sasa1977/boundary)), and runtime tracing under property tests. Every violation has a stable code and a doc page.
+
+- [Boundary setup guide](guides/boundary-setup.md) — wire the topology layer with `mix crank.gen.config` (or by hand).
+- [Property testing guide](guides/property-testing.md) — pure-mode + StreamData + tracing, the canonical purity-verification pattern.
+- [Typing state and memory guide](guides/typing-state-and-memory.md) — struct-per-state, closed unions, and the macro form.
+- [Suppressions guide](guides/suppressions.md) — the three layer-specific suppression mechanisms (source comments / Boundary config / `:allow` opt).
+- [Violations index](guides/violations/index.md) — every catalog code with its detection layer and doc page.
 
 ## License
 

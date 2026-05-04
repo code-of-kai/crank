@@ -277,14 +277,16 @@ end
 ```elixir
 # BAD — breaks the domain boundary
 def turn(:dispense, :dispensing, memory) do
-  MyApp.Repo.insert!(%MyApp.Transaction{...})  # side effect!
+  MyApp.Repo.insert!(%MyApp.Transaction{...})  # CRANK_PURITY_001
   {:next, :idle, %{memory | balance: 0}}
 end
 ```
 
 This means `Crank.turn/2` writes to a database. Tests need a database. A LiveView reducer writes to a database. The domain model is no longer pure, and the hexagonal boundary is broken.
 
-The domain model decides *what* happens (state transition). Adapters decide *what to do about it* (persist, notify, audit). Different concerns, different modules.
+Crank surfaces this exact pattern as a hard `CompileError` via the `@before_compile` static check (`CRANK_PURITY_001`). The Credo check (`Crank.Check.TurnPurity`) flags the same pattern at editor-save time, and the runtime trace (`Crank.PurityTrace`) catches it via property tests when the call lives transitively in a helper. See the [violations index](violations/index.md) for the full catalog and [property testing](property-testing.md) for the runtime layer.
+
+The fix is structural: declare the effect, don't perform it. `wants/2` returns effects as data; an adapter on `[:crank, :transition]` performs them. Different concerns, different modules.
 
 ### Don't block the gen_statem with slow adapters
 
@@ -318,17 +320,42 @@ def handle(_event, _measurements, meta, _config) do
 end
 ```
 
+### Don't reach for infrastructure from a domain helper
+
+```elixir
+# BAD — domain module aliases infrastructure  (CRANK_DEP_001)
+defmodule MyApp.OrderMachine do
+  use Crank
+  alias MyApp.Repo
+  ...
+end
+```
+
+Even if `Repo` is never *called* in this module, the alias declares a dependency on the persistence layer. The architecture's promise that the domain can be tested without a database is gone the moment the dependency exists. Boundary's post-compile graph check rejects this with `CRANK_DEP_001` whether or not the alias is dereferenced.
+
+For unmarked first-party helpers in strict mode (`CRANK_DEP_002`), the fix is one line: `use Crank.Domain.Pure` on the helper. That tags the module as part of the domain at the topology level *and* subjects its bodies to the same call-site blacklist as `turn/3`. See the [Boundary setup guide](boundary-setup.md).
+
 ### Don't attach adapters inside turn/3
 
 ```elixir
-# BAD — attaches a new adapter on every transition
+# BAD — attaches a new adapter on every transition  (CRANK_PURITY_005)
 def turn({:coin, amount}, :idle, memory) do
   :telemetry.attach("notify-#{memory.machine_id}", ...)
   {:next, :accepting, %{memory | balance: amount}}
 end
 ```
 
-Attach adapters once at application startup. They receive all transitions and filter by module/state using pattern matching.
+Attach adapters once at application startup. They receive all transitions and filter by module/state using pattern matching. The `:telemetry.attach/4` call is itself a side effect — it mutates the global telemetry handler table — so it falls under `CRANK_PURITY_005` (process communication / global mutation).
+
+## Verification of the boundary at compile and runtime
+
+The anti-patterns above used to be enforced by convention. They are now enforced mechanically:
+
+- **Compile time.** The `@before_compile` hook walks every `turn/3` body and the module's local references. Calls to `Repo`, `Logger`, `:rand`, time functions, ETS, file IO, etc. become hard `CompileError`s. The static call-site checks live in `Crank.Check.Blacklist` and `Crank.Check.CompileTime`.
+- **Topology.** Boundary's post-compile graph check rejects every domain → infrastructure reference (`CRANK_DEP_001..003`). `mix crank.gen.config` writes the starter Boundary config; `mix crank.check` is the canonical CI gate.
+- **Runtime.** `Crank.PurityTrace` runs `turn/3` in an isolated trace session and reports any blacklist match anywhere in the dynamic call graph. Combined with `StreamData` and `Crank.PropertyTest.assert_pure_turn/3`, every property test becomes a purity test for hundreds or thousands of generated event sequences.
+
+The discipline this guide describes is what the static and runtime layers enforce. If you write a domain module that breaks any of the rules, the build fails or the test fails — the boundary stops being a convention and becomes a property of the code. See the [property testing guide](property-testing.md) for the canonical pattern, the [violations index](violations/index.md) for the codes each layer can raise, and the [suppressions guide](suppressions.md) for the three layer-specific opt-out mechanisms when an exception is genuinely needed.
 
 ## Testing without infrastructure
 

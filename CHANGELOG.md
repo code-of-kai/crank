@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Layered purity enforcement
+
+This release operationalises the pure-core discipline through a layered enforcement system: compile-time call-site checks, post-compile topology checks delegated to [Boundary](https://github.com/sasa1977/boundary), runtime tracing under property tests, and type-level guards. Every violation has a stable code in `Crank.Errors.Catalog` and a per-code doc page under `guides/violations/`.
+
+### Requirements
+
+- **OTP 26+ is now required.** `Crank.PurityTrace` uses `:trace.session_create/3` and the surrounding session-scoped tracing API, which only exists in OTP 26+. `Crank.Application` raises `CRANK_SETUP_002` at boot if running on OTP < 26. CI matrix runs only OTP 26+. See [`CRANK_SETUP_002`](guides/violations/CRANK_SETUP_002.md).
+- **Boundary becomes a hard dependency.** Crank ships with `{:boundary, "~> 0.10"}` so the topology layer is always available. New projects run `mix crank.gen.config` (one-time setup, idempotent) to wire `:crank` into `compilers:`, write the starter Boundary config, and amend `.credo.exs`. See [`CRANK_SETUP_001`](guides/violations/CRANK_SETUP_001.md) and the [Boundary setup guide](guides/boundary-setup.md).
+
+### Added — by stage
+
+- **Foundation (Stage 1).** `Crank.Errors`, `Crank.Errors.Catalog` (22 frozen v1 codes), `Crank.Errors.Violation`, `Crank.Check.Blacklist` (single source of truth for the call-site blacklist, shared between Credo and `@before_compile`), `Crank.Suppressions` (Layer A parser + telemetry).
+- **OTP guard (Stage 2).** `Crank.Application` boots with the OTP 26+ check, starts `Crank.TaskSupervisor` for Mode B worker tasks.
+- **Static call-site checks (Stage 4).** `Crank.Check.TurnPurity` (Credo, warning-level) and `Crank.Check.CompileTime` (`@before_compile`, hard `CompileError`) are wired into `use Crank`. Both share the blacklist via `Crank.Check.Blacklist`. Source-adjacent `# crank-allow:` comments suppress per Layer A. See [`CRANK_PURITY_001..006`](guides/violations/index.md#call-site-purity-layer-a--source-comment-suppressible).
+- **Topology layer (Stages 3, 5, 6).** `Crank.BoundaryIntegration` translates Boundary diagnostics into `Crank.Errors.Violation` structs. `Crank.Domain.Pure` marker module tags first-party helpers as part of the domain. `mix crank.gen.config` writes the starter Boundary config with the `:domain`/`:infrastructure` cut and the third-party classification template. See [`CRANK_DEP_001..003`](guides/violations/index.md#topology-layer-b--boundary-config-suppressible).
+- **Runtime layer (Stage 7).** `Crank.PurityTrace` runs `turn/3` in an isolated OTP 26 trace session and reports any blacklist match anywhere in the dynamic call graph. `Crank.PropertyTest.assert_pure_turn/3` integrates this with StreamData so every property test becomes a purity test. See [`CRANK_PURITY_007`](guides/violations/CRANK_PURITY_007.md), [`CRANK_RUNTIME_001`](guides/violations/CRANK_RUNTIME_001.md), [`CRANK_RUNTIME_002`](guides/violations/CRANK_RUNTIME_002.md), [`CRANK_TRACE_001`](guides/violations/CRANK_TRACE_001.md), [`CRANK_TRACE_002`](guides/violations/CRANK_TRACE_002.md).
+- **Server resource limits (Stage 8).** `Crank.Server.start_link/3` accepts `:resource_limits`. Mode A applies `:max_heap_size` to the gen_statem. Mode B (`turn_timeout` set) spawns workers under `Crank.TaskSupervisor` with kill-on-timeout via `Task.shutdown(:brutal_kill)` — the only sound preemption pattern on the BEAM for non-yielding callbacks.
+- **Type layer (Stage 6).** Macro form `use Crank, states: [...], memory: M` declares the closed state union, generates the typespecs, rejects function/module values in memory or state types (`CRANK_TYPE_002`), warns on returns outside the declared union (`CRANK_TYPE_003`), and links Elixir's native struct-update field rejection into the catalog (`CRANK_TYPE_001`). See the [typing-state-and-memory guide](guides/typing-state-and-memory.md).
+- **CI gate (Stage 9).** `mix crank.check` wraps `mix compile --warnings-as-errors`, `mix credo --strict`, `mix dialyzer`, the Boundary check, and the property-test suite into one command. Exits non-zero on any failure with structured output.
+- **Documentation (Stages 10, 11).** Per-code doc pages for every violation under `guides/violations/`. Four new guides: [boundary-setup](guides/boundary-setup.md), [property-testing](guides/property-testing.md), [typing-state-and-memory](guides/typing-state-and-memory.md), [suppressions](guides/suppressions.md). [ROADMAP.md](ROADMAP.md) covers forward-looking work and known gaps.
+
+### Suppression — three layers, three mechanisms
+
+Each layer observes violations differently, so suppression is layer-specific by design:
+
+- **Layer A (source comments).** `# crank-allow: CODE` followed by `# reason: ...` immediately above the offending line. Silences AST-level violations.
+- **Layer B (Boundary config).** `:exceptions` entry naming the from/to module pair plus `reason:`. Silences topology violations.
+- **Layer C (programmatic `:allow` opt).** `{module, function, arity, reason: "..."}` entries on `Crank.PropertyTest.assert_pure_turn/3`. Silences runtime trace observations.
+
+Cross-layer attempts (`# crank-allow: CRANK_DEP_001` in source) raise `CRANK_META_004` with a pointer to the right mechanism. See the [Suppressions guide](guides/suppressions.md).
+
+### Known gaps (non-detectable in v1)
+
+The plan defines a precise detection matrix; classes outside it are explicit:
+
+- Trust in third-party library purity (universal floor across all static-purity disciplines).
+- Deliberate sabotage of markers.
+- Untested code paths for runtime-only categories.
+- Compile-time configuration leakage (`Application.compile_env`).
+- Reduction-budget enforcement in `Crank.PurityTrace` v1 — `:erlang.system_monitor/2` is VM-global and incompatible with parallel test execution. Tracked on the [ROADMAP](ROADMAP.md).
+
 ## [1.1.0] - 2026-04-22
 
 ### Added
