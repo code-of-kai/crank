@@ -5,6 +5,9 @@ defmodule Crank do
   runs the same callbacks inside `:gen_statem`. See the README for the guide.
   """
 
+  alias Crank.Domain.Pure
+  alias Crank.Typing
+
   @typedoc "A machine. Five fields: `module`, `state`, `memory`, `wants`, `engine`."
   @type t :: %__MODULE__{
           module: module(),
@@ -92,7 +95,15 @@ defmodule Crank do
   # ──────────────────────────────────────────────────────────────────────────
 
   defmacro __using__(opts) do
-    boundary_opts = Crank.Domain.Pure.build_boundary_opts(opts)
+    boundary_opts = Pure.build_boundary_opts(opts)
+
+    states = expand_states(Keyword.get(opts, :states), __CALLER__)
+    memory_struct = expand_alias(Keyword.get(opts, :memory), __CALLER__)
+
+    state_type_ast = Typing.build_state_type(states)
+    memory_type_ast = Typing.build_memory_type(memory_struct)
+    state_union_attr_ast = Typing.build_state_union_attribute(states)
+    memory_module_attr_ast = Typing.build_memory_module_attribute(memory_struct)
 
     quote location: :keep do
       @behaviour Crank
@@ -110,6 +121,18 @@ defmodule Crank do
       @before_compile Crank.Check.CompileTime
       Module.register_attribute(__MODULE__, :__crank_turn_bodies__, accumulate: false)
 
+      # Typing layer (Phase 1.7): when `states:` and/or `memory:` are passed,
+      # generate the corresponding typespecs and register an additional
+      # @before_compile hook that validates turn/3 returns against the
+      # declared state union (CRANK_TYPE_003).
+      Module.register_attribute(__MODULE__, :__crank_state_union__, accumulate: false)
+      Module.register_attribute(__MODULE__, :__crank_memory_module__, accumulate: false)
+      unquote(state_union_attr_ast)
+      unquote(memory_module_attr_ast)
+      unquote(state_type_ast)
+      unquote(memory_type_ast)
+      @before_compile Crank.Typing
+
       def child_spec(args) do
         %{
           id: __MODULE__,
@@ -122,6 +145,26 @@ defmodule Crank do
       defoverridable child_spec: 1
     end
   end
+
+  # Expand `:states` opt — accepts either a list of alias ASTs (from quoted
+  # `[Idle, Active]`) or a list of atom modules; returns a list of resolved
+  # module atoms. Returns nil when input is nil.
+  defp expand_states(nil, _caller), do: nil
+  defp expand_states([], _caller), do: []
+
+  defp expand_states(states, caller) when is_list(states) do
+    Enum.map(states, &expand_alias(&1, caller))
+  end
+
+  defp expand_alias(nil, _caller), do: nil
+
+  defp expand_alias(atom, _caller) when is_atom(atom), do: atom
+
+  defp expand_alias({:__aliases__, _, _} = alias_ast, caller) do
+    Macro.expand(alias_ast, caller)
+  end
+
+  defp expand_alias(other, _caller), do: other
 
   # ──────────────────────────────────────────────────────────────────────────
   # Public API

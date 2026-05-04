@@ -30,6 +30,8 @@ defmodule Mix.Tasks.Compile.Crank do
   use Mix.Task.Compiler
 
   alias Boundary.Mix.{CompilerState, View}
+  alias Mix.Task.Compiler, as: TaskCompiler
+  alias Mix.Tasks.Compile.Boundary, as: BoundaryCompiler
 
   @recursive true
 
@@ -39,11 +41,11 @@ defmodule Mix.Tasks.Compile.Crank do
       OptionParser.parse(argv, strict: [force: :boolean, warnings_as_errors: :boolean])
 
     CompilerState.start_link(Keyword.take(opts, [:force]))
-    Mix.Task.Compiler.after_compiler(:elixir, &after_elixir/1)
-    Mix.Task.Compiler.after_compiler(:app, &after_app(&1, opts))
+    TaskCompiler.after_compiler(:elixir, &after_elixir/1)
+    TaskCompiler.after_compiler(:app, &after_app(&1, opts))
 
     tracers = Code.get_compiler_option(:tracers) || []
-    Code.put_compiler_option(:tracers, [Mix.Tasks.Compile.Boundary | tracers])
+    Code.put_compiler_option(:tracers, [BoundaryCompiler | tracers])
 
     {:ok, []}
   end
@@ -58,7 +60,7 @@ defmodule Mix.Tasks.Compile.Crank do
   # `:invalid_reference` checker needs.
   defp after_elixir(outcome) do
     tracers = Code.get_compiler_option(:tracers) || []
-    cleaned = Enum.reject(tracers, &(&1 == Mix.Tasks.Compile.Boundary))
+    cleaned = Enum.reject(tracers, &(&1 == BoundaryCompiler))
     Code.put_compiler_option(:tracers, cleaned)
     outcome
   end
@@ -172,7 +174,7 @@ defmodule Mix.Tasks.Compile.Crank do
   end
 
   defp boundary_native_diagnostic({:cycle, modules}) do
-    cycle = modules |> Enum.map(&inspect/1) |> Enum.join(" -> ")
+    cycle = Enum.map_join(modules, " -> ", &inspect/1)
 
     %Mix.Task.Compiler.Diagnostic{
       compiler_name: "boundary",
