@@ -59,6 +59,7 @@ defmodule Crank.MixProject do
       extras: [
         "guides/composing-work.md",
         "guides/hexagonal-architecture.md",
+        "guides/transitions-and-guards.md",
         "CHANGELOG.md",
         "DESIGN.md"
       ],

@@ -105,6 +105,30 @@ The pure core stores these as data in `machine.wants`. `Crank.Server` interprets
 
 Any term. Typically a map projecting the parts of `(state, memory)` that external observers care about.
 
+## How transitions map to function clauses
+
+UML statechart theory writes every transition in the form `trigger [guard] / effect`, evaluated against a source state. Crank encodes all of this in a single `turn/3` clause — each component of the UML transition lands in a specific syntactic position:
+
+```elixir
+def turn({:select, item}, %Accepting{balance: bal}, %{price: price} = memory)
+#          ─── trigger ───  ── source state ──        ── extended state ──
+    when bal >= price do
+#   ────── guard ──────
+  {:next, %Dispensing{selection: item}, memory}
+# ──────────── effect + target state declared here ────────────
+end
+```
+
+| UML concept     | Crank location                | Mechanism                       |
+| --------------- | ----------------------------- | ------------------------------- |
+| Trigger / event | First argument                | Pattern match                   |
+| Source state    | Second argument               | Pattern match (often a struct)  |
+| Guard           | `when` expression             | Elixir guard                    |
+| Effect          | Return tuple                  | Declared as data                |
+| Target state    | `:next` field of return       | Constructed in the body         |
+
+There is no separate guard construct because the language already supplies one — it's spelled `when`. Patterns handle trigger-matching and source-state-matching; `when` handles the guard. Multiple transitions on the same event become multiple clauses, ordered by specificity. See [Transitions and guards](guides/transitions-and-guards.md) for the longer treatment.
+
 ## Design decisions and rationale
 
 1. **No actions on transitions.** The return from `turn/3` carries no effects. This is the structural enforcement of Moore discipline. Users cannot accidentally write Mealy code because there is no syntax for it.
