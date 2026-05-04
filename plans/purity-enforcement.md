@@ -1,5 +1,31 @@
 # Purity Enforcement Implementation Plan
 
+## Status
+
+**Implementation in progress.** Four of thirteen stages shipped to `main`; remainder in flight across parallel Claude Code Desktop sessions. The plan below remains the canonical specification — every session reads it as the source of truth. Per-session briefs in `plans/sessions/` describe how the work is split.
+
+### Shipped on `main`
+
+| Stage | Commit | What's live |
+|---|---|---|
+| 1. Foundation | `0df893d` | `Crank.Errors`, `Crank.Errors.Catalog` (22 frozen v1 codes), `Crank.Errors.Violation`, `Crank.Check.Blacklist` (shared between Credo and `@before_compile`), `Crank.Suppressions` (Layer A parser + telemetry) |
+| 2. OTP guard | `0df893d` | `Crank.Application` boots with OTP 26+ check (`CRANK_SETUP_002` if older), starts `Crank.TaskSupervisor` for Mode B worker tasks |
+| 4. Static checks | `ecc0618` | `Crank.Check.TurnPurity` (Credo) and `Crank.Check.CompileTime` (`@before_compile`) wired into `use Crank`. Hard `CompileError` on impure calls in `turn/3`. `# crank-allow:` suppression honoured. |
+| 8. Server resource limits | `62fd91d` | `Crank.Server.start_link/3` accepts `:resource_limits`. Mode A applies `:max_heap_size` to gen_statem; Mode B (`turn_timeout` set) spawns workers under `Crank.TaskSupervisor` with kill-on-timeout. Verified against non-yielding tight loop. |
+
+**Test status:** 245 tests passing on `main`. No regressions.
+
+### Remaining work, by track
+
+Three independent tracks plus a convergence session. Detailed briefs live in `plans/sessions/`:
+
+- **Track A — Topology** (Stages 3 → 5 → 6, sequential): Phase 0 Boundary spike, then `Crank.BoundaryIntegration` + `Crank.Compiler` + `Crank.Domain.Pure`, then the macro form for state/memory typing. See `plans/sessions/track-a-topology.md`.
+- **Track B — Runtime** (Stage 7, independent of A): `Crank.PurityTrace` with OTP 26 trace sessions + concurrency-stress test, then `Crank.PropertyTest` helpers. See `plans/sessions/track-b-runtime.md`.
+- **Track C — Documentation** (Stages 10 + 11, independent of A and B; markdown-only): 22 per-violation doc pages, `ROADMAP.md`, four new guides, existing-guide updates. See `plans/sessions/track-c-docs.md`.
+- **Convergence** (Stages 9, 12, 13 — runs after A, B, C land on `main`): `mix crank.gen.config` and `mix crank.check` Mix tasks, dogfooding via property tests on `Crank.Examples.*`, final CI-gate verification. See `plans/sessions/convergence.md`.
+
+Each track is sized for a single Claude Code Desktop session. Track A's three sub-stages run sequentially within one session because they're tightly coupled (Phase 0's outcome shapes Stage 5's design).
+
 ## Revision history
 
 - **v7 (consensus)** — Final editorial pass after Codex v6 review issued explicit TERMINATION SIGNAL ("ship with revisions, minor refinements only"). Fixed wording drift in 1.4's complexity note: the configuration template includes third-party app classification only, not stdlib classification (which Boundary cannot enforce at the module level). The Codex review trajectory across six passes — 9→6→5→4→3→1 findings, with the final pass producing only an editorial inconsistency — indicates the plan has converged. No remaining blockers or majors.
