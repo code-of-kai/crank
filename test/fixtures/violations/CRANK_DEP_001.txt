@@ -1,0 +1,11 @@
+CRANK_DEP_001 — dependency direction violation.
+
+A `:domain` boundary module references an `:infrastructure` boundary
+module (or a third-party impure app). Boundary catches it; the `:crank`
+Mix compiler reformats the diagnostic with this code.
+
+Exercised by:
+- test/crank/boundary_integration_test.exs — translate_error/2 for
+  invalid_reference tuples whose target is in :third_party_impure.
+- test/integration/topology_test.exs — end-to-end: a domain module
+  referring to an infrastructure module fails compile.

@@ -1,0 +1,9 @@
+CRANK_RUNTIME_002 — turn exceeded timeout.
+
+Wall-clock timeout (default 1s) reached during a traced turn. The worker
+is killed and `{:resource_exhausted, :timeout, partial_trace}` returned.
+
+Exercised by:
+- test/crank/purity_trace_test.exs — the SlowMachine timeout test.
+- test/crank/property_test_test.exs — Crank.PropertyTestTest.SlowMachine
+  asserts the AssertionError message includes CRANK_RUNTIME_002.

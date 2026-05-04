@@ -2,7 +2,7 @@
 
 ## Status
 
-**Implementation in progress.** Four of thirteen stages shipped to `main`; remainder in flight across parallel Claude Code Desktop sessions. The plan below remains the canonical specification — every session reads it as the source of truth. Per-session briefs in `plans/sessions/` describe how the work is split.
+**v2.0.0 shipped.** All thirteen stages landed; convergence session finalised the Mix tasks (`mix crank.gen.config`, `mix crank.check`), dogfooded the discipline through example FSMs and negative fixtures, ran the full CI gate suite, and bumped to v2.0.0.
 
 ### Shipped on `main`
 
@@ -14,8 +14,13 @@
 | 8. Server resource limits | `62fd91d` | `Crank.Server.start_link/3` accepts `:resource_limits`. Mode A applies `:max_heap_size` to gen_statem; Mode B (`turn_timeout` set) spawns workers under `Crank.TaskSupervisor` with kill-on-timeout. Verified against non-yielding tight loop. |
 | 5. Topology | `e8da511` | `Crank.BoundaryIntegration` translates Boundary errors → `CRANK_DEP_001/002/003`. `Crank.Domain.Pure` macro tags helpers as strict `:domain` boundaries. `Mix.Tasks.Compile.Crank` (`:crank` compiler) wraps Boundary's machinery and emits Crank-formatted diagnostics. `priv/boundary.exs.template` ships the third-party-app classification starter config. End-to-end integration test (`test/integration/dep_001_test.exs`) stages a consumer mix project and asserts `CRANK_DEP_001` fires on a domain→infra reference. |
 | 6. State/memory typing | `505d1ad` | `Crank.__using__/1` accepts `states: [...]` and `memory: ...`. Generates `@type state/0` (closed union) and `@type memory/0` automatically. `Crank.Typing` provides `@before_compile` for `CRANK_TYPE_003` (literal `{:next, %SomeState{}, _}` returns must be in declared union) and `@after_compile` for `CRANK_TYPE_002` (rejects `function/0` / `module/0` types in memory typespec via `Code.Typespec.fetch_types/1`, with best-effort skip-on-unfetchable for same-pass compilation order). |
+| 7. Runtime tracing | `e3c304b` | `Crank.PurityTrace` wraps OTP 26 trace sessions. `Crank.PurityTrace.Coordinator` GenServer serialises every `:trace.*` API call to avoid the ~30% event-loss rate observed under parallel calls. `Crank.PropertyTest.assert_pure_turn/3` integrates with StreamData; failures shrink to a minimal failing event sequence. |
+| 9. Mix tasks | (convergence) | `mix crank.gen.config` (one-time setup, idempotent) wires `:crank` into `compilers:`, drops `boundary.exs` from `priv/boundary.exs.template`, amends `.credo.exs`. `mix crank.check` (canonical CI gate) chains `mix compile --warnings-as-errors`, `mix credo --strict`, `mix dialyzer`, and `mix test`. `CRANK_PURITY_002` discard-form detection added to `@before_compile`. |
+| 10–11. Documentation | `b44c0ba` | 22 per-violation doc pages, four new guides (boundary-setup, property-testing, typing-state-and-memory, suppressions), ROADMAP.md. |
+| 12. Dogfooding | (convergence) | Property tests under `Crank.PropertyTest.assert_pure_turn/3` for every example FSM (`Door`, `Turnstile`, `VendingMachine`, `Order`, `Submission`). Negative fixtures under `test/fixtures/violations/<CODE>.{exs,txt}` cover all 22 catalog codes; the `violation_fixtures_test.exs` meta-test enforces coverage and asserts the `.exs` fixtures actually raise the expected `CompileError`. |
+| 13. CI verification | (convergence) | `mix compile --warnings-as-errors` clean. `mix dialyzer` clean (skipping four MapSet-opaqueness false positives from elixir 1.20-rc.3 via `.dialyzer_ignore.exs`). CI matrix expanded to Elixir 1.16/OTP 26, 1.17/OTP 26, 1.17/OTP 27. End-to-end integration tests under `test/integration/` stage real consumer projects and assert the full compile pipeline produces the expected diagnostics. |
 
-**Test status:** 292 tests passing on `main` (was 245; +29 from Stage 5 boundary tests, +18 from Stage 6 typing tests, including 2 new integration tests under `test/integration/`).
+**Test status:** 355 tests / 34 properties / 23 doctests passing (+63 from convergence: 15 gen.config + 3 crank.check + 5 example properties + 8 violation-fixtures meta + 2 e2e + the rest from new fixtures and the 002 detection).
 
 ### Phase 0 outcome — passed
 

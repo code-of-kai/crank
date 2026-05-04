@@ -1,0 +1,14 @@
+CRANK_DEP_003 — unclassified third-party app called from `:domain`.
+
+The domain calls a third-party OTP app that is not in the project's
+:third_party_pure or :third_party_impure list. Boundary fires; the
+`:crank` compiler emits this code so users explicitly classify each
+new dep before it can be called from domain code.
+
+Exercised by:
+- test/crank/boundary_integration_test.exs — translate_error with
+  invalid_external_dep_call and an unclassified target_app.
+- test/integration/topology_test.exs.
+
+Fix: add the app's atom name to either :third_party_pure or
+:third_party_impure in the project's :boundary config.

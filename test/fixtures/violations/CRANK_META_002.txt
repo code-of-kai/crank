@@ -1,0 +1,8 @@
+CRANK_META_002 — `# crank-allow:` references a code not in the catalog.
+
+The suppression cites a code like `CRANK_NOPE_999` that doesn't exist in
+the frozen `Crank.Errors.Catalog`. Catches typos and stale references
+to removed codes.
+
+Exercised by:
+- test/crank/suppressions_test.exs — parser tests for unknown codes.

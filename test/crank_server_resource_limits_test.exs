@@ -33,6 +33,8 @@ defmodule Crank.ServerResourceLimitsTest do
 
     @impl true
     def turn(:loop, :idle, memory) do
+      # crank-allow: CRANK_PURITY_002
+      # reason: test fixture deliberately exercises a non-yielding loop to verify the heap/timeout kill path
       _ = tight_loop(0)
       {:next, :done, memory}
     end

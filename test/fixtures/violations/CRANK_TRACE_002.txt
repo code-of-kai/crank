@@ -1,0 +1,8 @@
+CRANK_TRACE_002 — process dictionary modified during turn.
+
+Captured by before/after diff of the worker's process dictionary inside
+`Crank.PurityTrace.trace_pure/2`. Process dict is invisible to the static
+layer.
+
+Exercised by:
+- test/crank/purity_trace_test.exs — the process-dict mutation test.

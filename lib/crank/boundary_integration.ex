@@ -95,26 +95,22 @@ defmodule Crank.BoundaryIntegration do
   @spec translate_error(tuple(), opts()) :: Errors.Violation.t() | {:passthrough, tuple()}
   def translate_error(error_tuple, opts \\ [])
 
-  def translate_error({:invalid_reference, info} = tuple, opts) do
+  def translate_error({:invalid_reference, info}, opts) do
     type = Map.get(info, :type, :normal)
     ref = Map.get(info, :reference, %{})
 
     code = code_for_invalid_reference(type, info, opts)
 
-    if code do
-      Errors.build(code,
-        location: location_for_reference(ref),
-        violating_call: violating_call_for_reference(ref),
-        context: context_for_reference(info, code),
-        metadata: %{
-          from_boundary: Map.get(info, :from_boundary),
-          to_boundary: Map.get(info, :to_boundary),
-          boundary_error_type: type
-        }
-      )
-    else
-      {:passthrough, tuple}
-    end
+    Errors.build(code,
+      location: location_for_reference(ref),
+      violating_call: violating_call_for_reference(ref),
+      context: context_for_reference(info, code),
+      metadata: %{
+        from_boundary: Map.get(info, :from_boundary),
+        to_boundary: Map.get(info, :to_boundary),
+        boundary_error_type: type
+      }
+    )
   end
 
   def translate_error({:unclassified_module, _module} = tuple, _opts) do

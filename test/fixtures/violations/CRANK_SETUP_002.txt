@@ -1,0 +1,10 @@
+CRANK_SETUP_002 — runtime OTP < 26.
+
+`Crank.PurityTrace` requires `:trace.session_create/3` (OTP 26+). The
+guard runs at boot in `Crank.Application.start/2` and at the start of
+`mix crank.check` (synthetic via `--otp-release N`).
+
+Exercised by:
+- test/crank/application_test.exs — boot guard behaviour.
+- test/mix/tasks/crank.check_test.exs — the synthetic-OTP-25 test
+  asserting `mix crank.check` fails with this code.

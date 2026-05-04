@@ -1,0 +1,8 @@
+CRANK_META_004 — `# crank-allow:` references a code that this layer cannot suppress.
+
+Layer A (source comments) cannot silence Layer B (Boundary topology) or
+Layer C (runtime trace) violations. Each layer has its own suppression
+mechanism; trying to use the wrong one raises this code.
+
+Exercised by:
+- test/crank/suppressions_test.exs — parser tests for wrong-layer attempts.

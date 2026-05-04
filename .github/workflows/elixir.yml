@@ -17,24 +17,40 @@ permissions:
 jobs:
   build:
 
-    name: Build and test
+    name: Build and test (${{ matrix.elixir }} / OTP ${{ matrix.otp }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: '1.16.3'
+            otp: '26.2'
+          - elixir: '1.17.3'
+            otp: '26.2'
+          - elixir: '1.17.3'
+            otp: '27.1'
 
     steps:
     - uses: actions/checkout@v4
     - name: Set up Elixir
       uses: erlef/setup-beam@v1
       with:
-        elixir-version: '1.17.3'
-        otp-version: '27.1'
+        elixir-version: ${{ matrix.elixir }}
+        otp-version: ${{ matrix.otp }}
     - name: Restore dependencies cache
       uses: actions/cache@v4
       with:
         path: deps
-        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
-        restore-keys: ${{ runner.os }}-mix-
+        key: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-
     - name: Install dependencies
       run: mix deps.get
+    - name: Compile (warnings as errors)
+      run: mix compile --warnings-as-errors
     - name: Run tests
       run: mix test
+    - name: Run credo
+      run: mix credo --strict
+      continue-on-error: true

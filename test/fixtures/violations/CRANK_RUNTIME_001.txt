@@ -1,0 +1,9 @@
+CRANK_RUNTIME_001 — heap exhaustion during traced turn.
+
+Process heap cap (default 10MB) is hit during `Crank.PurityTrace.trace_pure/2`.
+The worker is killed by the BEAM and the trace returns
+`{:resource_exhausted, :heap, partial_trace}`.
+
+Exercised by:
+- test/crank/purity_trace_test.exs — the heap-exhaustion test that
+  builds an unbounded list inside a turn.

@@ -438,6 +438,8 @@ defmodule Crank.AdversarialTest do
       # for a bad argument. can_turn? must NOT swallow that helper's FCE
       # and falsely report the event unhandled.
       def turn(:go, :idle, m) do
+        # crank-allow: CRANK_PURITY_002
+        # reason: adversarial fixture deliberately discards a helper return to provoke a nested FunctionClauseError
         _ = buggy_helper(:not_one)
         {:stay, m}
       end

@@ -1,0 +1,9 @@
+CRANK_TYPE_003 — turn/3 returns a state not in the declared union.
+
+Severity: warning. When `use Crank, states: [:a, :b]` is set, returning
+`{:next, :c, memory}` is flagged. Caught by Crank.Typing's @before_compile
+hook.
+
+Exercised by:
+- test/crank/typing_test.exs — assertions on return-shape checks.
+- test/support/typing_fixtures.ex.

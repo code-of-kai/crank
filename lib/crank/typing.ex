@@ -221,45 +221,43 @@ defmodule Crank.Typing do
   end
 
   defp check_turn_returns(bodies, state_union, env) do
-    state_union_set = MapSet.new(state_union)
-
     bodies
-    |> Enum.flat_map(fn body -> walk_returns(body, state_union_set, env) end)
+    |> Enum.flat_map(fn body -> walk_returns(body, state_union, env) end)
   end
 
   # Walk an AST looking for `{:next, %Module{...}, _}` return shapes.
   # Returns a list of violations.
-  defp walk_returns(ast, state_union_set, env) do
+  defp walk_returns(ast, state_union, env) do
     {_, violations} =
-      Macro.prewalk(ast, [], &check_node(&1, &2, state_union_set, env))
+      Macro.prewalk(ast, [], &check_node(&1, &2, state_union, env))
 
     Enum.reverse(violations)
   end
 
-  defp check_node(node, acc, state_union_set, env) do
+  defp check_node(node, acc, state_union, env) do
     case extract_next_state(node) do
       {:literal_struct, module, line} ->
-        validate_state(node, acc, module, line, state_union_set, env)
+        validate_state(node, acc, module, line, state_union, env)
 
       _ ->
         {node, acc}
     end
   end
 
-  defp validate_state(node, acc, module, line, state_union_set, env) do
-    if MapSet.member?(state_union_set, module) do
+  defp validate_state(node, acc, module, line, state_union, env) do
+    if module in state_union do
       {node, acc}
     else
-      {node, [build_unknown_state_violation(module, line, state_union_set, env) | acc]}
+      {node, [build_unknown_state_violation(module, line, state_union, env) | acc]}
     end
   end
 
-  defp build_unknown_state_violation(module, line, state_union_set, env) do
+  defp build_unknown_state_violation(module, line, state_union, env) do
     Crank.Errors.build("CRANK_TYPE_003",
       location: %{file: env.file, line: line},
       context:
-        "turn/3 returns state #{inspect(module)}, which is not in the declared :states union (#{inspect(MapSet.to_list(state_union_set))})",
-      metadata: %{returned_state: module, declared_states: MapSet.to_list(state_union_set)}
+        "turn/3 returns state #{inspect(module)}, which is not in the declared :states union (#{inspect(state_union)})",
+      metadata: %{returned_state: module, declared_states: state_union}
     )
   end
 

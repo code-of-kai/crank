@@ -1,0 +1,10 @@
+CRANK_TYPE_002 — function value declared in memory or state typespec.
+
+The memory or state type declared via `use Crank, memory: T, states: [...]`
+references function/module values. Crank.Typing rejects these because
+data, not behaviour, must be carried — module values in state break
+serialisation and the saga discipline.
+
+Exercised by:
+- test/crank/typing_test.exs.
+- test/support/typing_fixtures.ex.

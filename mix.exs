@@ -1,7 +1,7 @@
 defmodule Crank.MixProject do
   use Mix.Project
 
-  @version "1.1.0"
+  @version "2.0.0"
   @source_url "https://github.com/code-of-kai/crank"
 
   def project do
@@ -16,7 +16,16 @@ defmodule Crank.MixProject do
       description: "Moore-style pure finite state machines (FSM) for Elixir — testable data structures first, optional gen_statem process adapter",
       source_url: @source_url,
       package: package(),
-      docs: docs()
+      docs: docs(),
+      dialyzer: dialyzer()
+    ]
+  end
+
+  defp dialyzer do
+    [
+      plt_add_apps: [:mix, :ex_unit, :credo],
+      flags: [:error_handling, :unknown],
+      ignore_warnings: ".dialyzer_ignore.exs"
     ]
   end
 

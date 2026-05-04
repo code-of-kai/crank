@@ -1,0 +1,9 @@
+CRANK_TYPE_001 — memory-field-unknown.
+
+A `turn/3` clause references a memory field not declared in the memory
+struct's defstruct. Caught by Crank.Typing's compile-time hook when
+:memory is set via `use Crank, memory: SomeStruct`.
+
+Exercised by:
+- test/crank/typing_test.exs — assertions on field-name validation.
+- test/support/typing_fixtures.ex — fixtures that compile with bad fields.

@@ -1,0 +1,11 @@
+CRANK_PURITY_007 — runtime trace catches transitive impurity.
+
+Triggered at runtime by `Crank.PurityTrace.trace_pure/2` when a turn
+delegates to a helper that calls a forbidden module. The static layer
+cannot follow user helpers; this is the runtime layer's job.
+
+Exercised by:
+- test/crank/property_test_test.exs (ImpureRandMachine.turn(:tick, :idle, _))
+  — calls DateTime.utc_now/0 inside turn/3, traced via assert_pure_turn.
+- test/crank/purity_trace_test.exs — direct trace_pure/2 calls against
+  a battery of impure fixtures.

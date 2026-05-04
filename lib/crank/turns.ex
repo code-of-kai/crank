@@ -164,14 +164,14 @@ defmodule Crank.Turns do
   """
   @spec append(t(), t()) :: t()
   def append(%__MODULE__{} = first, %__MODULE__{} = second) do
-    first_names = first |> names() |> MapSet.new()
-    second_names = second |> names() |> MapSet.new()
-    overlap = MapSet.intersection(first_names, second_names)
+    first_names = names(first)
+    second_names = names(second)
+    overlap = for n <- first_names, n in second_names, do: n
 
-    if MapSet.size(overlap) > 0 do
+    if overlap != [] do
       raise ArgumentError,
             "Crank.Turns.append/2: step names appear in both descriptors: " <>
-              "#{MapSet.to_list(overlap) |> inspect()}"
+              "#{inspect(overlap)}"
     end
 
     %__MODULE__{steps: first.steps ++ second.steps}

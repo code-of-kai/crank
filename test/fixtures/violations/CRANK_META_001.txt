@@ -1,0 +1,8 @@
+CRANK_META_001 — `# crank-allow:` annotation without `# reason:` follow-up.
+
+Layer A suppression hygiene. Every suppression must have a non-empty
+`# reason: ...` comment on the next line so reviewers can see *why* the
+exception was granted.
+
+Exercised by:
+- test/crank/suppressions_test.exs — parser tests for missing reason.

@@ -31,7 +31,15 @@
           "apps/*/test/",
           "apps/*/web/"
         ],
-        excluded: [~r"/_build/", ~r"/deps/", ~r"/node_modules/"]
+        excluded: [
+          ~r"/_build/",
+          ~r"/deps/",
+          ~r"/node_modules/",
+          # Negative violation fixtures intentionally contain impure calls;
+          # excluding them keeps `Crank.Check.TurnPurity` from flagging the
+          # very patterns the fixtures exist to trigger.
+          ~r"/test/fixtures/violations/"
+        ]
       },
       #
       # Load and configure plugins here:

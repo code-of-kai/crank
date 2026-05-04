@@ -1,0 +1,10 @@
+CRANK_SETUP_001 — project lacks `:crank` in `:compilers`.
+
+`mix crank.check` fails fast with this code. Detected by reading the
+project's Mix config; the absence of `:crank` in the compilers list
+means Boundary's topology check (the `:crank` Mix compiler) is not
+running, which silently disables CRANK_DEP_*.
+
+Exercised by:
+- test/mix/tasks/crank.check_test.exs — pushes a project config with
+  no compilers and asserts the check fails with this code.

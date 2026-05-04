@@ -163,7 +163,7 @@ defmodule Crank.Errors do
   Renders a `%Violation{}` as a `CompileError`. Used by the `@before_compile`
   hook (1.3) and by `Crank.Compiler` (1.4) when raising at compile time.
   """
-  @spec to_compile_error(Violation.t()) :: CompileError.t()
+  @spec to_compile_error(Violation.t()) :: Exception.t()
   def to_compile_error(%Violation{} = v) do
     file = (v.location && v.location[:file]) || "(unknown)"
     line = (v.location && v.location[:line]) || 0

@@ -1,0 +1,11 @@
+CRANK_DEP_002 — unmarked first-party helper called from `:domain`.
+
+In strict mode, a domain module calls a first-party helper that is not
+marked with `use Crank.Domain.Pure`. Boundary's strict topology catches
+the unclassified call; the `:crank` compiler emits this code.
+
+Exercised by:
+- test/crank/boundary_integration_test.exs.
+- test/integration/topology_test.exs.
+
+Fix: add `use Crank.Domain.Pure` to the helper module.

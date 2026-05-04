@@ -433,17 +433,15 @@ defmodule Crank.Server.Adapter do
     end
   end
 
-  # Defensive wrapper around Task.Supervisor.async_nolink. The historical
-  # OTP contract for supervisor saturation has varied; we handle both the
-  # tagged-tuple return and the :exit signal modes so the code works on
-  # any OTP 26+ release.
+  # Wrapper around Task.Supervisor.async_nolink. On OTP 26+ the success
+  # path always returns `%Task{}`; saturation surfaces as a `:noproc` /
+  # `{:max_children, _}` exit signal, which we trap here. The
+  # tagged-tuple return shape was a historical OTP contract that no
+  # longer fires on supported releases.
   defp start_worker_task(fun) do
     try do
-      case Task.Supervisor.async_nolink(Crank.TaskSupervisor, fun) do
-        %Task{} = task -> {:ok, task}
-        {:error, :max_children_reached} -> :saturated
-        {:error, _other} -> :saturated
-      end
+      %Task{} = task = Task.Supervisor.async_nolink(Crank.TaskSupervisor, fun)
+      {:ok, task}
     catch
       :exit, {:noproc, _} -> :supervisor_down
       :exit, reason -> if saturation_exit?(reason), do: :saturated, else: :erlang.raise(:exit, reason, __STACKTRACE__)
@@ -458,6 +456,7 @@ defmodule Crank.Server.Adapter do
     end
   end
 
+  @spec handle_resource_violation(pid(), term(), term(), term(), binary(), term()) :: no_return()
   defp handle_resource_violation(_parent, data, event, state, code, reason) do
     emit(:exception, %{
       module: data.module,
@@ -585,6 +584,7 @@ defmodule Crank.Server.Adapter do
     )
   end
 
+  @spec raise_bad_turn(module(), term(), term()) :: no_return()
   defp raise_bad_turn(module, state, result) do
     raise ArgumentError,
           "#{inspect(module)}.turn/3 in state #{inspect(state)} " <>

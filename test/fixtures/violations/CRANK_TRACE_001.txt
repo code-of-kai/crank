@@ -1,0 +1,9 @@
+CRANK_TRACE_001 — atom-table mutation observed during traced turn.
+
+Severity: warning. Captured when `:atom_table_check` is enabled and the
+atom-count snapshot before/after the turn shows growth. New atoms are
+VM-global and cannot be GC'd; treating each new atom as a violation
+catches accidental atom creation via String.to_atom/1 and friends.
+
+Exercised by:
+- test/crank/purity_trace_test.exs — the atom-table-check test.

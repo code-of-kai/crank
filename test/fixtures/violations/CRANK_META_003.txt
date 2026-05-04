@@ -1,0 +1,8 @@
+CRANK_META_003 — `# crank-allow:` annotation with no following code line.
+
+The suppression sits more than 3 lines from the offending code (or has
+no following code at all). Catches drifted suppressions whose target
+moved or was deleted.
+
+Exercised by:
+- test/crank/suppressions_test.exs — parser tests for orphaned suppressions.

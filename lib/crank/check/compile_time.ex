@@ -98,36 +98,80 @@ defmodule Crank.Check.CompileTime do
   defp walk_for_violations(ast, file, suppressions) do
     {_, violations} =
       Macro.prewalk(ast, [], fn node, acc ->
-        case Blacklist.match_call(node) do
-          {:violation, code, message, _doc_url} ->
-            line = call_line(node) || 0
-
-            violation =
-              Errors.build(code,
-                location: %{file: file, line: line},
-                fix_category: message,
-                violating_call: extract_call_info(node)
-              )
-
-            if Suppressions.suppressed?(violation, suppressions) do
-              suppression = Map.get(suppressions, line)
-
-              if suppression do
-                Suppressions.emit_suppression_telemetry(violation, suppression)
-              end
-
-              {node, acc}
-            else
-              {node, [violation | acc]}
-            end
-
-          nil ->
-            {node, acc}
+        case detect_violation(node, file) do
+          nil -> {node, acc}
+          violation -> {node, accumulate_violation(violation, acc, suppressions)}
         end
       end)
 
     Enum.reverse(violations)
   end
+
+  defp detect_violation(node, file) do
+    case Blacklist.match_call(node) do
+      {:violation, code, message, _doc_url} ->
+        line = call_line(node) || 0
+
+        Errors.build(code,
+          location: %{file: file, line: line},
+          fix_category: message,
+          violating_call: extract_call_info(node)
+        )
+
+      nil ->
+        case discard_form(node) do
+          {:discarded, line, info} ->
+            # CRANK_PURITY_002: `_ = <call>` discards a return value
+            # inside `turn/3`. Side-effect intent is the only reason to
+            # discard a pure return; flag it for review.
+            Errors.build("CRANK_PURITY_002",
+              location: %{file: file, line: line},
+              fix_category:
+                "remove the discarded call or move it behind wants/2 — discarding a return signals side-effect intent",
+              violating_call: info
+            )
+
+          :no ->
+            nil
+        end
+    end
+  end
+
+  defp accumulate_violation(violation, acc, suppressions) do
+    if Suppressions.suppressed?(violation, suppressions) do
+      line = violation.location.line
+      suppression = Map.get(suppressions, line)
+
+      if suppression do
+        Suppressions.emit_suppression_telemetry(violation, suppression)
+      end
+
+      acc
+    else
+      [violation | acc]
+    end
+  end
+
+  # Recognises the `_ = <call>` pattern. We only fire CRANK_PURITY_002 for
+  # local-call discards — remote-call discards whose target is impure are
+  # already flagged by Blacklist with a more specific code, and the prewalk
+  # visits the inner call anyway. Pure remote-call discards (e.g.
+  # `_ = Map.get(memory, :x)`) are also valid signals but produce noise on
+  # legitimate idioms; v1 keeps 002 scoped to local-call discards.
+  defp discard_form({:=, meta, [{:_, _, _}, rhs]}) when is_list(meta) do
+    case rhs do
+      {fun, _, args}
+      when is_atom(fun) and is_list(args) and fun not in [:., :__aliases__, :{}, :%{}, :__block__] ->
+        line = Keyword.get(meta, :line, 0)
+        info = %{module: Kernel, function: fun, arity: length(args)}
+        {:discarded, line, info}
+
+      _ ->
+        :no
+    end
+  end
+
+  defp discard_form(_), do: :no
 
   # ── helpers ──────────────────────────────────────────────────────────────
 

@@ -59,13 +59,7 @@ defmodule Crank.Application do
   """
   @spec otp_release() :: non_neg_integer()
   def otp_release do
-    case :erlang.system_info(:otp_release) do
-      release when is_list(release) ->
-        release |> List.to_string() |> String.to_integer()
-
-      release when is_binary(release) ->
-        String.to_integer(release)
-    end
+    :erlang.system_info(:otp_release) |> List.to_string() |> String.to_integer()
   end
 
   @doc """
