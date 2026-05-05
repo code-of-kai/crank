@@ -158,6 +158,30 @@ defmodule Crank.ServerResourceLimitsTest do
     end
   end
 
+  describe "max_heap_size unit conversion (regression)" do
+    # `:max_heap_size` is documented as bytes in the public API; internally
+    # the BEAM expects words. The Server and PurityTrace must agree on the
+    # conversion so the same byte cap means the same effective heap on
+    # both paths. Pre-fix, Server passed bytes directly and produced caps
+    # ~8x tighter than configured on 64-bit BEAM.
+    test "byte-denominated cap matches PurityTrace's effective cap" do
+      bytes = 8 * 1024 * 1024
+      wordsize = :erlang.system_info(:wordsize)
+      expected_words = div(bytes, wordsize)
+
+      # Mode A: spin up a server and inspect the process flag.
+      {:ok, pid} =
+        Crank.Server.start_link(SlowMachine, [],
+          resource_limits: [max_heap_size: bytes]
+        )
+
+      info = Process.info(pid, :max_heap_size)
+      assert {:max_heap_size, %{size: ^expected_words}} = info
+
+      Crank.Server.stop(pid)
+    end
+  end
+
   defp match_runtime_002?(reason) do
     inspect_reason(reason) =~ "CRANK_RUNTIME_002"
   end

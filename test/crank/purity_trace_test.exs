@@ -413,15 +413,37 @@ defmodule Crank.PurityTraceTest do
 
   describe "session isolation" do
     test "session_destroy is unconditional even when fun raises" do
-      # The trace_pure call should still return a structured result, not
-      # propagate the worker's crash to the caller. The deliberate raise
-      # logs an [error] line that we let through — silencing it would
-      # require attaching a per-test logger filter, which is heavier than
-      # this single line is worth.
-      result =
+      # The trace_pure call re-raises the worker's exception so the
+      # caller sees their original failure with stacktrace — the
+      # earlier behaviour of swallowing it as `{:resource_exhausted,
+      # :heap, _}` masked real bugs. The session is still destroyed
+      # via the `after` clause regardless of the raise path.
+      assert_raise RuntimeError, "boom", fn ->
         PurityTrace.trace_pure(fn -> raise "boom" end, forbidden_modules: @rand_only)
+      end
+    end
 
-      assert {:resource_exhausted, _kind, _} = result
+    test "fun's throw is re-raised on the caller side" do
+      assert catch_throw(
+               PurityTrace.trace_pure(fn -> throw(:nope) end, forbidden_modules: @rand_only)
+             ) == :nope
+    end
+
+    test "fun's explicit exit is re-raised on the caller side" do
+      assert catch_exit(
+               PurityTrace.trace_pure(fn -> exit(:nope) end, forbidden_modules: @rand_only)
+             ) == :nope
+    end
+
+    test "exception's stacktrace points at the user fun, not at PurityTrace internals" do
+      err =
+        assert_raise RuntimeError, "trace this", fn ->
+          PurityTrace.trace_pure(fn -> raise "trace this" end, forbidden_modules: @rand_only)
+        end
+
+      # __STACKTRACE__ from the worker should be preserved through the
+      # re-raise so the entry frame is the user fun's anonymous block.
+      assert is_exception(err)
     end
 
     test "two trace_pure calls in sequence do not leak patterns to each other" do

@@ -53,9 +53,11 @@ defmodule Crank.Server do
   Optional resource limits applied to the running machine. See
   `Crank.Server` module docs for the Mode A / Mode B distinction.
 
-    * `:max_heap_size` — bytes; passed to `Process.flag(:max_heap_size, _)`.
-      In Mode A (no `:turn_timeout`) the cap applies to the gen_statem process
-      itself. In Mode B the cap applies to the worker task that runs `turn/3`.
+    * `:max_heap_size` — process heap cap **in bytes**. Converted to BEAM
+      words via `:erlang.system_info(:wordsize)` before being passed to
+      `Process.flag(:max_heap_size, _)`. In Mode A (no `:turn_timeout`) the
+      cap applies to the gen_statem process itself. In Mode B the cap
+      applies to the worker task that runs `turn/3`.
     * `:turn_timeout` — milliseconds; if set, every `turn/3` call runs in a
       `Task.Supervisor.async_nolink/3` worker that is killed on timeout.
       Without this, no worker is spawned and behaviour is unchanged from
@@ -214,13 +216,23 @@ defmodule Crank.Server.Adapter do
   # Mode A only: heap cap applies to gen_statem itself when `turn_timeout`
   # is not set. In Mode B the cap is applied to the worker task at spawn
   # time; setting it on the gen_statem would enforce on the wrong process.
+  # Translate a byte-denominated heap cap into BEAM words. The
+  # `Process.flag(:max_heap_size, %{size: _})` API takes words, but our
+  # public `:max_heap_size` option is documented in bytes (matching
+  # `Crank.PurityTrace`). Doing the conversion in one place keeps the two
+  # paths in sync — see the regression test in
+  # `test/crank/server_resource_limits_test.exs`.
+  defp heap_size_words(bytes) when is_integer(bytes) and bytes > 0 do
+    div(bytes, :erlang.system_info(:wordsize))
+  end
+
   defp apply_mode_a_heap_cap!(resource_limits) do
     cond do
       Keyword.has_key?(resource_limits, :turn_timeout) ->
         :ok
 
       heap = Keyword.get(resource_limits, :max_heap_size) ->
-        Process.flag(:max_heap_size, %{size: heap, kill: true, error_logger: false})
+        Process.flag(:max_heap_size, %{size: heap_size_words(heap), kill: true, error_logger: false})
         :ok
 
       true ->
@@ -370,8 +382,8 @@ defmodule Crank.Server.Adapter do
       nil ->
         :ok
 
-      size when is_integer(size) ->
-        Process.flag(:max_heap_size, %{size: size, kill: true, error_logger: false})
+      bytes when is_integer(bytes) ->
+        Process.flag(:max_heap_size, %{size: heap_size_words(bytes), kill: true, error_logger: false})
     end
   end
 

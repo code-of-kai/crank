@@ -311,7 +311,19 @@ defmodule Crank.PurityTrace do
       atom_before =
         if check_atom_table, do: :erlang.system_info(:atom_count), else: 0
 
-      result = fun.()
+      # Capture the user code's outcome so the caller can re-raise with
+      # the original kind/reason/stacktrace. Without this, exceptions
+      # surface as a bare `:killed` or unknown exit reason and get
+      # misreported as heap exhaustion.
+      captured =
+        try do
+          {:ok, fun.()}
+        rescue
+          e -> {:raised, :error, e, __STACKTRACE__}
+        catch
+          kind, reason when kind in [:exit, :throw] ->
+            {:raised, kind, reason, __STACKTRACE__}
+        end
 
       dict_after = MapSet.new(Process.get_keys())
 
@@ -320,7 +332,7 @@ defmodule Crank.PurityTrace do
 
       # Convey result + diagnostics through the exit reason. This avoids
       # using `send/2`, which would require :erlang.send tracing rules.
-      exit({:crank_trace_result, result, dict_before, dict_after, atom_before, atom_after})
+      exit({:crank_trace_result, captured, dict_before, dict_after, atom_before, atom_after})
     end)
   end
 
@@ -409,10 +421,35 @@ defmodule Crank.PurityTrace do
   # ── Verdict construction ──────────────────────────────────────────────────
 
   defp finalize_down(
-         {:crank_trace_result, result, dict_before, dict_after, atom_before, atom_after},
+         {:crank_trace_result, captured, dict_before, dict_after, atom_before, atom_after},
          trace,
          allow
        ) do
+    case captured do
+      {:ok, result} ->
+        finalize_ok(result, trace, allow, dict_before, dict_after, atom_before, atom_after)
+
+      {:raised, kind, reason, stacktrace} ->
+        # Re-raise inside the caller so the user sees their original
+        # exception with its stacktrace, not a fabricated "heap exhausted"
+        # verdict. Trace events captured before the raise are discarded
+        # — they belong to a function call that did not complete.
+        :erlang.raise(kind, reason, stacktrace)
+    end
+  end
+
+  # The BEAM kills the worker with reason `:killed` when the
+  # `Process.flag(:max_heap_size, %{kill: true})` cap is hit.
+  defp finalize_down(:killed, trace, _allow),
+    do: {:resource_exhausted, :heap, trace}
+
+  # Shouldn't happen on supported releases — kept as a safety net for
+  # any historical OTP that produced this shape. If we get here on a
+  # current release, the worker died for a reason we did not expect;
+  # propagate it so the failure is visible rather than masked.
+  defp finalize_down(reason, _trace, _allow), do: exit(reason)
+
+  defp finalize_ok(result, trace, allow, dict_before, dict_after, atom_before, atom_after) do
     impurity = build_impurity_violations(trace, allow)
 
     diffs =
@@ -424,23 +461,6 @@ defmodule Crank.PurityTrace do
       violations -> {:impurity, violations, trace}
     end
   end
-
-  defp finalize_down(:killed, trace, _allow),
-    do: {:resource_exhausted, :heap, trace}
-
-  defp finalize_down({:max_heap_exceeded, _}, trace, _allow),
-    do: {:resource_exhausted, :heap, trace}
-
-  defp finalize_down(reason, trace, _allow)
-       when is_tuple(reason) and tuple_size(reason) >= 1 do
-    case elem(reason, 0) do
-      :max_heap_exceeded -> {:resource_exhausted, :heap, trace}
-      _ -> {:resource_exhausted, :heap, trace}
-    end
-  end
-
-  defp finalize_down(_reason, trace, _allow),
-    do: {:resource_exhausted, :heap, trace}
 
   defp build_impurity_violations(trace, allow) do
     trace
