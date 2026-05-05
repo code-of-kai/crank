@@ -58,7 +58,7 @@ end
 
 A `%Drafting{}` cannot have a `confirmation_number` field because the struct doesn't define one. The compiler rejects `%Drafting{confirmation_number: "X"}` at compile time. A `%Cancelled{}` cannot accidentally drop the cancellation reason because the field exists in the struct. The shape encodes the rules.
 
-This is what Crank's catalog calls `CRANK_TYPE_001`: any reference to a field that isn't in `defstruct` is a compile error today. There's nothing for Crank to add — Elixir's compiler does it. Crank's contribution is to surface the catalog code so the failure routes through the same reporting pipeline as the other purity violations, and to insist (via the macro form) that every state in the union is a struct.
+Elixir's compiler does this work for free; Crank's only contribution at this rung is to insist (via the macro form) that every state in the union is a struct.
 
 ## The macro form
 
@@ -90,10 +90,10 @@ What the macro does:
 
 - **Generates `@type state/0`** as the union of the listed state structs (`Drafting.t() | Priced.t() | ...`). Dialyzer can now check that every `turn/3` clause's return matches the declared union.
 - **Generates `@type memory/0`** referencing the named memory struct.
-- **Adds a compile-time check** that every `turn/3` clause's return-tuple's second element is one of the declared states, or computes to one (see `CRANK_TYPE_003`).
-- **Rejects `function/0` and `module/0` in the typespecs** of memory or state structs (see `CRANK_TYPE_002`).
+- **Adds a compile-time check** that every `turn/3` clause's return-tuple's second element is one of the declared states, or computes to one.
+- **Rejects `function/0` and `module/0` in the typespecs** of memory or state structs.
 
-*(Implementation note: the macro form ships with the Stage 6 / Track A work. Manual typespecs continue to work — the macro form is opt-in.)*
+The macro form is opt-in; manual typespecs work too.
 
 ## Memory as a typed struct
 
@@ -113,12 +113,12 @@ end
 
 Two things this buys:
 
-1. **Field-name typos are compile errors.** `%{memory | submitted_t: now}` (note the typo) is rejected by the compiler — Elixir's struct-update semantics check field names. This is `CRANK_TYPE_001`.
-2. **Dialyzer can warn on type mismatches.** Assigning `42` to `:tenant_id` (declared `Ecto.UUID.t()`) produces a Dialyzer warning. The catalog's `CRANK_TYPE_001_DIALYZER` (in the [ROADMAP](../ROADMAP.md)) tracks the work to surface this through the standard `Crank.Errors` pipeline; today Dialyzer reports it directly.
+1. **Field-name typos are compile errors.** `%{memory | submitted_t: now}` (note the typo) is rejected by the compiler — Elixir's struct-update semantics check field names.
+2. **Dialyzer can warn on type mismatches.** Assigning `42` to `:tenant_id` (declared `Ecto.UUID.t()`) produces a Dialyzer warning.
 
 ## What not to put in state or memory
 
-Three categories are forbidden by `CRANK_TYPE_002`:
+Three categories are forbidden:
 
 ```elixir
 # WRONG — function value in memory
@@ -152,9 +152,7 @@ For each, the fix is the same: carry the data that *selects* the function/module
 
 ## Closing state unions for exhaustiveness
 
-The set-theoretic type system in v1.17+ moves toward type-checking unions across function clauses. When that work matures, declared state unions like `Drafting.t() | Priced.t() | ...` will let the compiler warn on `turn/3` clauses that don't cover every (event, state) combination — analogous to Rust's `match` exhaustiveness.
-
-Crank's macro form is forward-compatible: declare the closed union now, get warnings when the compiler can check them. No code change required. `Crank.Examples.Submission` is written with this in mind — it's the first example that would activate exhaustiveness when the language work lands.
+Declare the closed union now (`states: [Drafting, Priced, ...]`) and you get exhaustiveness warnings on `turn/3` for free as Elixir's set-theoretic type system matures — no code change required.
 
 ## The progressive-activation principle
 
@@ -163,9 +161,9 @@ The type discipline is laid out so each successive choice activates more enforce
 | Choice | What it activates |
 |---|---|
 | Atomic states (`:idle`, `:running`) | Pattern-matching only. No type help. |
-| Struct-per-state (`%Idle{}`, `%Running{}`) | Field-name validation (`CRANK_TYPE_001`). |
+| Struct-per-state (`%Idle{}`, `%Running{}`) | Field-name validation by the Elixir compiler. |
 | Typespecs on each state struct | Dialyzer warnings on misuse. |
-| `use Crank, states: [...], memory: M` | Closed-union check (`CRANK_TYPE_003`); function-in-memory rejection (`CRANK_TYPE_002`). |
+| `use Crank, states: [...], memory: M` | Closed-union return check; function/module/pid rejected in memory. |
 | Closed event unions (future) | Compile-time exhaustiveness on `turn/3`. |
 
 You can stop at any rung. Crank doesn't require the macro form. But every step up adds enforcement that costs you nothing at runtime and saves a class of bugs that would otherwise show up in production.
@@ -185,4 +183,5 @@ In both cases the suppression is deliberate and documented. Don't suppress to av
 - [Property testing](property-testing.md) — how the closed shape interacts with StreamData generators.
 - [Boundary setup](boundary-setup.md) — the topology layer that complements type-level enforcement.
 - [DESIGN.md](../DESIGN.md) — "Compiler-checked exhaustiveness (future)" and "Struct-per-state."
-- Violation pages: [CRANK_TYPE_001](violations/CRANK_TYPE_001.md), [CRANK_TYPE_002](violations/CRANK_TYPE_002.md), [CRANK_TYPE_003](violations/CRANK_TYPE_003.md).
+
+The catalog codes this guide is the source-of-truth for: [CRANK_TYPE_001](violations/CRANK_TYPE_001.md) (unknown struct field), [CRANK_TYPE_002](violations/CRANK_TYPE_002.md) (function/module/pid in state or memory), [CRANK_TYPE_003](violations/CRANK_TYPE_003.md) (return-state outside the declared union).
