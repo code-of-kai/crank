@@ -317,14 +317,22 @@ end
 
 ## Documentation
 
-- [DESIGN.md](DESIGN.md) — Full specification and design rationale.
-- [Composing Work guide](guides/composing-work.md) — `Crank.Wants`, `Crank.Turns`, multi-machine work.
-- [Hexagonal Architecture guide](guides/hexagonal-architecture.md) — Persistence, notifications, audit logging.
-- [Transitions and guards guide](guides/transitions-and-guards.md) — How UML statechart transitions map to `turn/3` clauses and `when` guards.
-- [Typing state and memory guide](guides/typing-state-and-memory.md) — struct-per-state, closed unions, and the macro form.
-- [Purity enforcement](guides/purity-enforcement.md) — how Crank keeps `turn/3` pure. Read if you hit a `CRANK_*` error.
-- [CHANGELOG.md](CHANGELOG.md) — Version history.
-- [ROADMAP.md](ROADMAP.md) — Forward-looking work and known gaps.
+**To use Crank** (in order):
+
+- [Transitions and guards](guides/transitions-and-guards.md) — how UML statechart transitions map to `turn/3` clauses and `when` guards.
+- [Composing Work](guides/composing-work.md) — `Crank.Wants`, `Crank.Turns`, multi-machine work.
+- [Hexagonal Architecture](guides/hexagonal-architecture.md) — wiring persistence, notifications, audit logging.
+
+**To understand Crank** (the why):
+
+- [DESIGN.md](DESIGN.md) — full specification and design rationale.
+- [Typing state and memory](guides/typing-state-and-memory.md) — why struct-per-state, closed unions, and the macro form pay rent.
+- [ROADMAP.md](ROADMAP.md) — forward-looking work and known gaps.
+
+**Reference** (read on demand):
+
+- [Purity enforcement](guides/purity-enforcement.md) — what the `CRANK_*` errors mean and how to suppress them.
+- [CHANGELOG.md](CHANGELOG.md) — version history.
 
 ## License
 
