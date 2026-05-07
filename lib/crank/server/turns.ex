@@ -105,21 +105,11 @@ defmodule Crank.Server.Turns do
   # Core loop
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp do_apply([], results, monitors, _ref_steps, _timeout) do
-    demonitor_all(monitors)
-    {:ok, results}
+  defp do_apply([], results, monitors, ref_steps, _timeout) do
+    finish({:ok, results}, monitors, ref_steps)
   end
 
   defp do_apply([{name, machine_res, event_res} | rest], results, monitors, ref_steps, timeout) do
-    # Drain any late `:DOWN` for refs we already saw alive. The
-    # 25ms window in `check_for_down/1` covers the common case;
-    # under heavy scheduler load `:DOWN` can land between turns.
-    # Catching it here doesn't change attribution (the proper fix
-    # is the v2.1 reply-contract change tracked in ROADMAP) but
-    # emits `[:crank, :server_turns, :late_down]` telemetry so
-    # projects can quantify residual race rate.
-    drain_late_down(ref_steps)
-
     server = resolve(machine_res, results)
     validate_server!(server, name)
     event = resolve(event_res, results)
@@ -138,15 +128,30 @@ defmodule Crank.Server.Turns do
         reason ->
           # Turn delivered the reading, but the server stopped as a
           # consequence (e.g., stop_and_reply).
-          demonitor_all(monitors)
-          {:error, name, reason, Map.put(results, name, reading)}
+          finish({:error, name, reason, Map.put(results, name, reading)}, monitors, ref_steps)
       end
     catch
       :exit, exit_reason ->
         # Pre-existing death, timeout, or crash without reply.
-        demonitor_all(monitors)
-        {:error, name, {:server_exit, exit_reason}, results}
+        finish({:error, name, {:server_exit, exit_reason}, results}, monitors, ref_steps)
     end
+  end
+
+  # Single-shot end-of-apply cleanup. Drains any late `:DOWN`
+  # messages that arrived during the run (emitting telemetry) and
+  # demonitors all tracked servers.
+  #
+  # Why end-of-apply, not between steps? Per-step draining ran a
+  # selective `receive` per tracked ref before every step, which is
+  # O(N) per step with N growing across the run — O(N²) over the
+  # full apply, or worse with non-trivial caller mailboxes. Codex
+  # review #7 flagged that as a latency cliff under load. A single
+  # drain at completion produces the same telemetry visibility at
+  # O(N) total cost, paid once.
+  defp finish(result, monitors, ref_steps) do
+    drain_late_down(ref_steps)
+    demonitor_all(monitors)
+    result
   end
 
   @doc """

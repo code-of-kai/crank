@@ -215,6 +215,44 @@ defmodule Crank.Server.TurnsTest do
       end
     end
 
+    # Codex review #7 (2026-05-07): an earlier iteration ran
+    # `drain_late_down/1` between every step, paying N selective
+    # receives per step (O(N²) over the apply, worse under
+    # mailbox pressure). Now drained once at the end. This test
+    # pins that contract: a 100-ref drain with a heavily-loaded
+    # caller mailbox completes in well under a second.
+    test "drain_late_down/1 with 100 refs and a busy mailbox stays under 500ms" do
+      # Pre-load mailbox with 1000 unrelated messages so the
+      # selective receive must scan past them.
+      Enum.each(1..1_000, fn i -> send(self(), {:noise, i}) end)
+
+      # Build a ref_steps map with 100 fake refs. None match the
+      # mailbox, so each receive scans and times out at 0.
+      ref_steps =
+        for i <- 1..100, into: %{} do
+          {make_ref(), %{step: :"step_#{i}", server: self()}}
+        end
+
+      started_at = :erlang.monotonic_time(:millisecond)
+      ServerTurns.drain_late_down(ref_steps)
+      elapsed = :erlang.monotonic_time(:millisecond) - started_at
+
+      assert elapsed < 500,
+             "drain_late_down with 100 refs over 1000-message mailbox took #{elapsed}ms; expected <500ms"
+    after
+      # Drain noise we injected so it doesn't leak into other tests
+      # in the same describe block.
+      drain_noise()
+    end
+
+    defp drain_noise do
+      receive do
+        {:noise, _} -> drain_noise()
+      after
+        0 -> :ok
+      end
+    end
+
     test "drain_late_down/1 is a no-op when no late :DOWN is queued" do
       handler_id = "test-late-down-noop-#{System.unique_integer()}"
       parent = self()
