@@ -366,9 +366,18 @@ defmodule Crank.PurityTrace do
   # ── Collection loop ───────────────────────────────────────────────────────
 
   defp collect_loop(worker, monitor_ref, timeout, trace_acc, allow, session) do
-    deadline = monotonic_ms() + timeout
+    deadline = compute_deadline(timeout)
     do_collect(worker, monitor_ref, deadline, trace_acc, allow, session)
   end
+
+  # `:infinity` is a valid Erlang timeout shape and was previously
+  # accepted by the `receive ... after timeout` form. Preserve that
+  # contract: when no deadline is configured, we still iterate but
+  # the after-clause uses `:infinity` directly.
+  defp compute_deadline(:infinity), do: :infinity
+
+  defp compute_deadline(timeout) when is_integer(timeout) and timeout >= 0,
+    do: monotonic_ms() + timeout
 
   # Each iteration computes the *remaining* time until the absolute
   # deadline rather than using the original timeout. Without this, a
@@ -376,7 +385,7 @@ defmodule Crank.PurityTrace do
   # every message and the timeout path is unreachable. With absolute
   # deadlines, the timeout fires regardless of trace volume.
   defp do_collect(worker, monitor_ref, deadline, trace_acc, allow, session) do
-    remaining = max(deadline - monotonic_ms(), 0)
+    remaining = remaining_ms(deadline)
 
     receive do
       {:trace, ^worker, :call, mfa} ->
@@ -409,6 +418,9 @@ defmodule Crank.PurityTrace do
         {:resource_exhausted, :timeout, Enum.reverse(final_trace)}
     end
   end
+
+  defp remaining_ms(:infinity), do: :infinity
+  defp remaining_ms(deadline), do: max(deadline - monotonic_ms(), 0)
 
   defp monotonic_ms, do: :erlang.monotonic_time(:millisecond)
 

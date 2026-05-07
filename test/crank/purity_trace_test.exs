@@ -124,6 +124,18 @@ defmodule Crank.PurityTraceTest do
     end
   end
 
+  # ── timeout: :infinity compatibility (Codex review #5 finding 2) ─────────
+
+  describe "timeout option compatibility" do
+    test "timeout: :infinity does not raise (preserves Erlang timeout shape)" do
+      assert {:ok, 4, _trace} =
+               PurityTrace.trace_pure(fn -> 2 + 2 end,
+                 timeout: :infinity,
+                 forbidden_modules: @rand_only
+               )
+    end
+  end
+
   # ── Flush telemetry (Codex review #4 finding 2) ───────────────────────────
 
   describe "flush_trace timeout telemetry" do

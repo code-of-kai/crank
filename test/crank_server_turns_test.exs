@@ -167,6 +167,33 @@ defmodule Crank.Server.TurnsTest do
       assert results.coin_b == %{status: :accepting, balance: 50}
       assert results.coin_c == %{status: :accepting, balance: 100}
     end
+
+    # Codex review #5 (2026-05-07) finding 1: an earlier iteration
+    # made `check_for_down/1` poll for 100ms per step on the alive
+    # path, paying full budget on every successful turn. This test
+    # pins the latency contract: 5 successful steps complete in well
+    # under that 5x budget. Liberal threshold (200ms total for 5
+    # steps == 40ms/step ceiling) absorbs CI jitter while still
+    # catching a per-step latency-tax regression.
+    test "happy-path multi-step does not pay a per-step latency tax" do
+      vm = start_server!(VendingMachine, price: 100)
+
+      started_at = :erlang.monotonic_time(:millisecond)
+
+      {:ok, _results} =
+        Turns.new()
+        |> Turns.turn(:a, vm, {:coin, 10})
+        |> Turns.turn(:b, vm, {:coin, 10})
+        |> Turns.turn(:c, vm, {:coin, 10})
+        |> Turns.turn(:d, vm, {:coin, 10})
+        |> Turns.turn(:e, vm, {:coin, 10})
+        |> ServerTurns.apply()
+
+      elapsed = :erlang.monotonic_time(:millisecond) - started_at
+
+      assert elapsed < 200,
+             "5 healthy steps took #{elapsed}ms — expected <200ms (no per-step DOWN-poll latency tax)"
+    end
   end
 
   # ──────────────────────────────────────────────────────────────────────────

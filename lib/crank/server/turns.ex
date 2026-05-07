@@ -171,49 +171,38 @@ defmodule Crank.Server.Turns do
     end
   end
 
-  # Wait for a :DOWN on this specific ref. Erlang's monitor-ordering
-  # guarantee says :DOWN arrives after the last message from the
-  # monitored process, so if the server stopped during this turn
-  # (reply-then-stop), the :DOWN is in-transit immediately after our
-  # call returned. The wait window absorbs scheduler latency between
-  # "reply sent" and "BEAM emits :DOWN".
+  # Wait briefly for a :DOWN on this specific ref. Erlang's
+  # monitor-ordering guarantee says :DOWN arrives after the last
+  # message from the monitored process, so if the server stopped
+  # during this turn (reply-then-stop), the :DOWN is in-transit
+  # immediately after our call returned.
   #
   # `:erlang.yield/0` gives up scheduler time so the dying server's
-  # termination can complete before we check.
+  # termination can complete before we check. The single bounded
+  # `receive` then either picks up the :DOWN or returns nil.
   #
-  # **Residual race (acknowledged, ROADMAP for v2.1).** Under extreme
-  # scheduler pressure the BEAM may not deliver :DOWN within
-  # `@down_total_wait_ms`. The cleanly correct fix is to embed the
-  # engine state in the synchronous reply contract — that's an API
-  # change deferred to v2.1. For v2.0.x we use a generous deadline:
-  # 100ms total, polled in 20ms slices so we yield repeatedly rather
-  # than blocking once. In practice the :DOWN arrives in the first
-  # slice on idle systems and within 1–2 slices on loaded CI runners.
+  # **Why a single short wait, not a longer poll loop.** A previous
+  # iteration tried a 100ms deadline polled in 20ms slices to absorb
+  # extreme scheduler latency. Codex flagged that as a per-step
+  # latency tax: the alive-path NEVER matches `:DOWN`, so every
+  # successful turn paid the full budget — ~100ms per step in the
+  # happy path, O(steps) latency on multi-step pipelines. The fix
+  # is the v2.1 reply-contract change tracked in ROADMAP; for v2.0.x
+  # we keep the wait short (single 25ms window, slightly above the
+  # original 10ms for margin). The residual race under extreme load
+  # is the price of keeping process-mode turns fast.
   #
   # Returns the exit reason if :DOWN arrived, or nil if the server is
   # alive. Messages for other refs are left in the mailbox untouched.
-  @down_slice_ms 20
-  @down_total_wait_ms 100
+  @down_wait_ms 25
 
   defp check_for_down(ref) do
-    deadline = :erlang.monotonic_time(:millisecond) + @down_total_wait_ms
-    poll_for_down(ref, deadline)
-  end
-
-  defp poll_for_down(ref, deadline) do
     :erlang.yield()
-    remaining = max(deadline - :erlang.monotonic_time(:millisecond), 0)
-    slice = min(remaining, @down_slice_ms)
 
     receive do
       {:DOWN, ^ref, _, _, reason} -> reason
     after
-      slice ->
-        if remaining > slice do
-          poll_for_down(ref, deadline)
-        else
-          nil
-        end
+      @down_wait_ms -> nil
     end
   end
 
