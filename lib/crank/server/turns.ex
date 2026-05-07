@@ -103,21 +103,34 @@ defmodule Crank.Server.Turns do
   # the recursive body. Threading state via function args alone
   # cannot reach the after-handler when the deep recursion frame is
   # unwound by an exception.
+  #
+  # The slot is save-restored across nested calls. A resolver
+  # function inside `do_apply/4` could call `Crank.Server.Turns.apply/2`
+  # again on the same process; without save-restore the inner call
+  # would clobber the outer accumulator and any refs the outer had
+  # already tracked would never get drained or demonitored on the
+  # outer's exit. `Process.put/2` returns the previous value, which
+  # the after-handler restores so the outer scope sees its own
+  # refs again.
   @ref_steps_key {__MODULE__, :ref_steps}
 
   @spec apply(Turns.t(), timeout()) :: apply_result()
   def apply(%Turns{} = turns, timeout \\ 5_000) do
     steps = Turns.to_list(turns)
-    Process.put(@ref_steps_key, %{})
+    prev_ref_steps = Process.put(@ref_steps_key, %{})
 
     try do
       do_apply(steps, %{}, %{}, timeout)
     after
-      ref_steps = Process.delete(@ref_steps_key) || %{}
+      ref_steps = Process.get(@ref_steps_key, %{})
       drain_late_down(ref_steps)
       flush_all_refs(ref_steps)
+      restore_ref_steps_slot(prev_ref_steps)
     end
   end
+
+  defp restore_ref_steps_slot(nil), do: Process.delete(@ref_steps_key)
+  defp restore_ref_steps_slot(prev), do: Process.put(@ref_steps_key, prev)
 
   # ──────────────────────────────────────────────────────────────────────────
   # Core loop

@@ -626,6 +626,60 @@ defmodule Crank.Server.TurnsTest do
       end
     end
 
+    # Codex review #11 (2026-05-08): a step resolver can call
+    # `ServerTurns.apply/2` again on the same process. Without
+    # save-restore of the process-dict slot, the nested call's
+    # `Process.put(@ref_steps_key, %{})` clobbers the outer's
+    # accumulator and the outer's refs go uncleaned, leaking
+    # `:DOWN` to the caller's mailbox.
+    test "nested ServerTurns.apply does not clobber the outer cleanup state" do
+      outer_name = :"crank_turns_nested_outer_#{System.unique_integer([:positive])}"
+      inner_name = :"crank_turns_nested_inner_#{System.unique_integer([:positive])}"
+
+      {:ok, outer_pid} = Crank.Server.start_link(SimpleEcho, [], name: outer_name)
+      {:ok, inner_pid} = Crank.Server.start_link(SimpleEcho, [], name: inner_name)
+
+      try do
+        # Outer apply has step :a against outer_name and step :b
+        # whose resolver runs a nested apply against inner_name.
+        # The nested apply must not clobber the outer's
+        # ref_steps slot.
+        {:ok, results} =
+          Turns.new()
+          |> Turns.turn(:a, outer_name, :tick)
+          |> Turns.turn(
+            :b,
+            fn _prior ->
+              # Nested apply on the same process. With the bug, this
+              # would `Process.put(slot, %{})`, losing the outer's
+              # ref for outer_name.
+              {:ok, _inner} =
+                Turns.new()
+                |> Turns.turn(:nested, inner_name, :tick)
+                |> ServerTurns.apply()
+
+              outer_name
+            end,
+            :tick
+          )
+          |> ServerTurns.apply()
+
+        assert results.a == %{count: 1}
+        assert results.b == %{count: 2}
+
+        # Stop outer_pid AFTER apply returns. With the bug, the
+        # outer apply's after-block ran with empty ref_steps (the
+        # nested call cleared it), so outer_pid's monitor was never
+        # demonitored — its :DOWN leaks to us here.
+        Crank.Server.stop(outer_pid)
+
+        refute_receive {:DOWN, _, :process, _, _}, 200
+      after
+        if Process.alive?(outer_pid), do: Crank.Server.stop(outer_pid)
+        if Process.alive?(inner_pid), do: Crank.Server.stop(inner_pid)
+      end
+    end
+
     test "process dict key is cleared after apply returns" do
       # Sanity check: the apply-scoped process-dict slot doesn't
       # leak past `apply/2`. Otherwise any caller observing their
