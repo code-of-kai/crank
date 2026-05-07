@@ -105,8 +105,8 @@ defmodule Crank.Server.Turns do
   # Core loop
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp do_apply([], results, monitors, ref_steps, _timeout) do
-    finish({:ok, results}, monitors, ref_steps)
+  defp do_apply([], results, _monitors, ref_steps, _timeout) do
+    finish({:ok, results}, ref_steps)
   end
 
   defp do_apply([{name, machine_res, event_res} | rest], results, monitors, ref_steps, timeout) do
@@ -115,6 +115,13 @@ defmodule Crank.Server.Turns do
     event = resolve(event_res, results)
     {ref, monitors} = ensure_monitor(server, monitors)
 
+    # Track every ref the apply ever created — including the one
+    # for this step before we know its outcome. `finish/3` uses
+    # this to flush all monitor handles uniformly, regardless of
+    # which path (success, stop-reason, exit-during-call) we exit
+    # through.
+    ref_steps = Map.put(ref_steps, ref, %{step: name, server: server})
+
     try do
       reading = Crank.Server.turn(server, event, timeout)
 
@@ -122,24 +129,31 @@ defmodule Crank.Server.Turns do
         nil ->
           # Server is alive (or any :DOWN for it arrives beyond the window,
           # which would only happen for causes unrelated to this turn).
-          ref_steps = Map.put(ref_steps, ref, %{step: name, server: server})
           do_apply(rest, Map.put(results, name, reading), monitors, ref_steps, timeout)
 
         reason ->
           # Turn delivered the reading, but the server stopped as a
           # consequence (e.g., stop_and_reply).
-          finish({:error, name, reason, Map.put(results, name, reading)}, monitors, ref_steps)
+          finish({:error, name, reason, Map.put(results, name, reading)}, ref_steps)
       end
     catch
       :exit, exit_reason ->
         # Pre-existing death, timeout, or crash without reply.
-        finish({:error, name, {:server_exit, exit_reason}, results}, monitors, ref_steps)
+        finish({:error, name, {:server_exit, exit_reason}, results}, ref_steps)
     end
   end
 
   # Single-shot end-of-apply cleanup. Drains any late `:DOWN`
-  # messages that arrived during the run (emitting telemetry) and
-  # demonitors all tracked servers.
+  # messages that arrived during the run (emitting telemetry), then
+  # flushes any remaining monitor handles for every ref ever
+  # created during the apply (not just the latest per server).
+  #
+  # Order matters: drain first (consumes & emits telemetry for
+  # arrived `:DOWN`s), flush second (cleans up the monitor handles
+  # for refs that were superseded mid-apply by re-monitoring).
+  # Without flushing every historical ref, an old monitor whose
+  # `:DOWN` arrives after `apply/2` returns would leak into the
+  # caller's mailbox.
   #
   # Why end-of-apply, not between steps? Per-step draining ran a
   # selective `receive` per tracked ref before every step, which is
@@ -148,10 +162,14 @@ defmodule Crank.Server.Turns do
   # review #7 flagged that as a latency cliff under load. A single
   # drain at completion produces the same telemetry visibility at
   # O(N) total cost, paid once.
-  defp finish(result, monitors, ref_steps) do
+  defp finish(result, ref_steps) do
     drain_late_down(ref_steps)
-    demonitor_all(monitors)
+    flush_all_refs(ref_steps)
     result
+  end
+
+  defp flush_all_refs(ref_steps) do
+    Enum.each(ref_steps, fn {ref, _} -> Process.demonitor(ref, [:flush]) end)
   end
 
   @doc """
@@ -211,10 +229,15 @@ defmodule Crank.Server.Turns do
   # and the next step's `check_for_down/1` falsely attributes that
   # stop to the wrong (succeeding) turn.
   #
-  # `Process.demonitor(ref, [:flush])` removes any pending `:DOWN`
-  # for the old ref, then we re-monitor against the current
-  # registration. The cost is two BIF calls per step — negligible
-  # relative to the cross-process call we're about to make.
+  # `Process.demonitor(old_ref)` is called WITHOUT `[:flush]`. The
+  # flush variant would scrub any pending `:DOWN` for the old ref
+  # from the mailbox — including the late-arriving `:DOWN` that
+  # `drain_late_down/1` is meant to surface as telemetry. By NOT
+  # flushing here, we deactivate the old monitor handle (no future
+  # `:DOWN` signals) but leave any already-delivered `:DOWN` in
+  # the mailbox for end-of-apply accounting. The mailbox is then
+  # cleaned up by `flush_all_refs/1` in `finish/3` after telemetry
+  # has had its chance to fire.
   #
   # Applies uniformly to pid, registered-atom, and {name, node}
   # targets. For pids the demonitor is a no-op-equivalent (pid never
@@ -227,7 +250,7 @@ defmodule Crank.Server.Turns do
         {ref, Map.put(monitors, server, ref)}
 
       old_ref ->
-        Process.demonitor(old_ref, [:flush])
+        Process.demonitor(old_ref)
         ref = Process.monitor(server)
         {ref, Map.put(monitors, server, ref)}
     end
@@ -268,9 +291,4 @@ defmodule Crank.Server.Turns do
     end
   end
 
-  defp demonitor_all(monitors) do
-    Enum.each(monitors, fn {_server, ref} ->
-      Process.demonitor(ref, [:flush])
-    end)
-  end
 end
