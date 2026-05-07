@@ -66,7 +66,10 @@ defmodule Crank.Domain.Pure do
       # via `module.__info__(:attributes)` to identify Crank-domain
       # modules and emit `CRANK_DEP_002` when they reference unclassified
       # first-party helpers.
-      Module.register_attribute(__MODULE__, :__crank_domain__, persist: true)
+      #
+      # `accumulate: true` makes the marker tamper-resistant — see the
+      # rationale in `Crank.__using__/1`.
+      Module.register_attribute(__MODULE__, :__crank_domain__, accumulate: true, persist: true)
       @__crank_domain__ true
 
       use Boundary, unquote(boundary_opts)

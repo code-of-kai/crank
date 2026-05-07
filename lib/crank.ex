@@ -112,7 +112,13 @@ defmodule Crank do
       # `module.__info__(:attributes)`) so the topology post-processor
       # can identify Crank-domain modules and emit `CRANK_DEP_002` for
       # references into unclassified first-party helpers.
-      Module.register_attribute(__MODULE__, :__crank_domain__, persist: true)
+      #
+      # `accumulate: true` makes the marker tamper-resistant: a later
+      # `@__crank_domain__ false` (deliberate or accidental) adds to
+      # the list rather than replacing the `true` we set here.
+      # Detection logic asks "is `true` anywhere in the list?", so
+      # the marker can only be added, never removed.
+      Module.register_attribute(__MODULE__, :__crank_domain__, accumulate: true, persist: true)
       @__crank_domain__ true
 
       # Topology layer (Phase 1.4): tag this module as a `:domain` Boundary

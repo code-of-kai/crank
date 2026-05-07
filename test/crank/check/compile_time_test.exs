@@ -49,6 +49,51 @@ defmodule Crank.Check.CompileTimeTest do
       end
     end
 
+    # Phoenix-convention namespaced Repo: `MyApp.Repo.insert!` should
+    # also fail compile. Without the terminal-segment match in
+    # `Crank.Check.Blacklist`, this would silently pass.
+    test "module with MyApp.Repo.insert! inside turn/3 fails to compile with CRANK_PURITY_001" do
+      module_source = """
+      defmodule CompileTimeTest.ImpureMyAppRepo do
+        use Crank
+
+        @impl true
+        def start(_), do: {:ok, :idle, %{}}
+
+        @impl true
+        def turn(_event, :idle, memory) do
+          _ = MyApp.Repo.insert!(%{foo: :bar})
+          {:next, :active, memory}
+        end
+      end
+      """
+
+      assert_raise CompileError, ~r/CRANK_PURITY_001/, fn ->
+        Code.eval_string(module_source)
+      end
+    end
+
+    test "module with MyApp.Mailer.deliver inside turn/3 fails to compile with CRANK_PURITY_001" do
+      module_source = """
+      defmodule CompileTimeTest.ImpureMyAppMailer do
+        use Crank
+
+        @impl true
+        def start(_), do: {:ok, :idle, %{}}
+
+        @impl true
+        def turn(_event, :idle, memory) do
+          _ = MyApp.Mailer.deliver(%{to: "x@example.com"})
+          {:next, :active, memory}
+        end
+      end
+      """
+
+      assert_raise CompileError, ~r/CRANK_PURITY_001/, fn ->
+        Code.eval_string(module_source)
+      end
+    end
+
     test "module with DateTime.utc_now/0 inside turn/3 fails with CRANK_PURITY_004" do
       module_source = """
       defmodule CompileTimeTest.ImpureNonDeterminism do

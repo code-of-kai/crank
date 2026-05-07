@@ -11,13 +11,38 @@ defmodule Crank.Check.BlacklistTest do
       assert String.starts_with?(doc_url, "https://hexdocs.pm/crank/")
     end
 
-    test "matches MyApp.Repo.all/1 (alias prefix uses last segment)" do
-      ast = quote do: Repo.all(query)
+    # Phoenix-style projects place the Repo under the app namespace
+    # (`MyApp.Repo`). The static matcher matches on the terminal segment
+    # so the call is caught regardless of how the user namespaces it.
+    # Codex review #3 (2026-05-06) surfaced that without this rule the
+    # static layer missed every Phoenix-convention call site.
+    test "matches MyApp.Repo.insert!/1 (terminal-segment match)" do
+      ast = quote do: MyApp.Repo.insert!(record)
+      assert {:violation, "CRANK_PURITY_001", _, _} = Blacklist.match_call(ast)
+    end
+
+    test "matches deeply-nested OtherApp.Persistence.Repo.all/1" do
+      ast = quote do: OtherApp.Persistence.Repo.all(query)
+      assert {:violation, "CRANK_PURITY_001", _, _} = Blacklist.match_call(ast)
+    end
+
+    test "matches MyApp.Mailer.deliver/1 (terminal-segment match)" do
+      ast = quote do: MyApp.Mailer.deliver(message)
       assert {:violation, "CRANK_PURITY_001", _, _} = Blacklist.match_call(ast)
     end
 
     test "does not match Repository (similar name; not on list)" do
       ast = quote do: Repository.fetch(id)
+      assert Blacklist.match_call(ast) == nil
+    end
+
+    test "does not match MyApp.Repository (terminal segment is Repository, not Repo)" do
+      ast = quote do: MyApp.Repository.fetch(id)
+      assert Blacklist.match_call(ast) == nil
+    end
+
+    test "does not match Repo.SubModule.foo (`SubModule` is the terminal, not `Repo`)" do
+      ast = quote do: Repo.SubModule.foo()
       assert Blacklist.match_call(ast) == nil
     end
   end

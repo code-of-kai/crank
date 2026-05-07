@@ -147,12 +147,20 @@ defmodule Mix.Tasks.Compile.Crank do
     |> MapSet.new()
   end
 
+  # The `__crank_domain__` attribute is registered with
+  # `accumulate: true, persist: true`, so a module that calls
+  # `use Crank` (or `use Crank.Domain.Pure`) ends up with at least
+  # one `true` value in the accumulated list. We accept the marker
+  # as long as `true` appears anywhere in that list — a later
+  # `@__crank_domain__ false` (deliberate or accidental) cannot
+  # remove the original `true`. This is the tamper-resistance the
+  # third Codex review asked for.
   defp crank_domain_module?(module) when is_atom(module) do
     Code.ensure_loaded?(module) and
       function_exported?(module, :__info__, 1) and
       module.__info__(:attributes)
-      |> Keyword.get(:__crank_domain__, [])
-      |> List.wrap()
+      |> Keyword.get_values(:__crank_domain__)
+      |> List.flatten()
       |> Enum.member?(true)
   rescue
     _ -> false

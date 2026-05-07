@@ -247,8 +247,21 @@ defmodule Crank.Check.Blacklist do
 
   # ── Matcher predicates ────────────────────────────────────────────────────
 
-  defp matches?({:module, name}, ast), do: module_name(ast) == name
+  # `{:module, "Repo"}` matches the canonical name `Repo` and any
+  # alias whose terminal segment is `Repo` — `MyApp.Repo`,
+  # `OtherApp.Persistence.Repo`, etc. The Phoenix convention places
+  # the Repo under the app namespace; without the suffix match the
+  # static layer would miss every Phoenix-style call site.
+  defp matches?({:module, name}, ast) do
+    case module_name(ast) do
+      nil -> false
+      module -> module == name or String.ends_with?(module, "." <> name)
+    end
+  end
 
+  # `{:prefix, "Ecto"}` matches `Ecto` and `Ecto.Query` (third-party
+  # libraries don't usually appear under a user namespace; if they
+  # did, the user is doing something unusual and explicit).
   defp matches?({:prefix, name}, ast) do
     case module_name(ast) do
       nil -> false

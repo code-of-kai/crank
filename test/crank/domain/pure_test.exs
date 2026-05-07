@@ -139,10 +139,80 @@ defmodule Crank.Domain.PureTest do
     end
   end
 
+  describe "__crank_domain__ marker — tamper-resistant" do
+    # Codex review #3 (2026-05-06) flagged that a non-accumulating
+    # marker could be downgraded by `@__crank_domain__ false` after
+    # `use Crank`. The attribute is now registered with
+    # `accumulate: true, persist: true`, so a later `false` value
+    # adds to the list rather than replacing the `true` we set.
+    # The Mix-task detection asks "is `true` anywhere in the
+    # accumulated list?", which makes the tag write-once.
+
+    test "use Crank produces an accumulated list with at least one `true`" do
+      values = crank_domain_values(Crank.Examples.Door)
+
+      assert true in values,
+             "expected `true` in accumulated :__crank_domain__ list, got: #{inspect(values)}"
+    end
+
+    test "use Crank.Domain.Pure also accumulates a `true`" do
+      Code.eval_string("""
+      defmodule Crank.Domain.PureTest.MarkerTamperResistance do
+        use Crank.Domain.Pure
+
+        def add(a, b), do: a + b
+      end
+      """)
+
+      values = crank_domain_values(Crank.Domain.PureTest.MarkerTamperResistance)
+      assert true in values
+    after
+      :code.purge(Crank.Domain.PureTest.MarkerTamperResistance)
+      :code.delete(Crank.Domain.PureTest.MarkerTamperResistance)
+    end
+
+    test "user appending `@__crank_domain__ false` does NOT remove the original `true`" do
+      Code.eval_string("""
+      defmodule Crank.Domain.PureTest.AttemptedTamper do
+        use Crank
+
+        # Simulate the threat model: a user (or a clumsy macro) writes
+        # `false` after `use Crank`, hoping to opt out of CRANK_DEP_002
+        # detection without removing the `use` line. With the
+        # accumulating marker, this is a no-op for the detection logic.
+        @__crank_domain__ false
+
+        @impl true
+        def start(_), do: {:ok, :idle, %{}}
+
+        @impl true
+        def turn(_event, :idle, memory), do: {:next, :active, memory}
+
+        @impl true
+        def turn(_event, :active, memory), do: {:stay, memory}
+      end
+      """)
+
+      values = crank_domain_values(Crank.Domain.PureTest.AttemptedTamper)
+
+      assert true in values, "tamper attempt should not remove the `true` value"
+      assert false in values, "the `false` is still recorded (visible to reviewers/auditors)"
+    after
+      :code.purge(Crank.Domain.PureTest.AttemptedTamper)
+      :code.delete(Crank.Domain.PureTest.AttemptedTamper)
+    end
+  end
+
   defp boundary_attribute(module) do
     case Keyword.get(module.__info__(:attributes), Boundary) do
       [data] when is_map(data) -> data
       _ -> nil
     end
+  end
+
+  defp crank_domain_values(module) do
+    module.__info__(:attributes)
+    |> Keyword.get_values(:__crank_domain__)
+    |> List.flatten()
   end
 end
