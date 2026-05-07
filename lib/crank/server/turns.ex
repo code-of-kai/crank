@@ -179,14 +179,64 @@ defmodule Crank.Server.Turns do
     kind, reason -> emit_cleanup_failure(label, kind, reason, __STACKTRACE__)
   end
 
+  # Emit `[:crank, :server_turns, :cleanup_failure]` with bounded,
+  # structured metadata. We intentionally do NOT include the raw
+  # exception term or full stacktrace: stacktraces commonly embed
+  # caller arguments (which can carry user data), and downstream
+  # telemetry handlers often forward metadata into APMs/logs.
+  # Redacting at the source — exception module + truncated message
+  # + top stack frames — preserves the diagnostic value (you still
+  # know what failed and where) without arbitrary payload export.
   defp emit_cleanup_failure(label, kind, reason, stacktrace) do
     :telemetry.execute(
       [:crank, :server_turns, :cleanup_failure],
       %{},
-      %{label: label, kind: kind, reason: reason, stacktrace: stacktrace}
+      %{
+        label: label,
+        kind: kind,
+        exception_module: exception_module(kind, reason),
+        message: bounded_message(kind, reason),
+        top_frames: top_stack_frames(stacktrace, 5)
+      }
     )
 
     :ok
+  end
+
+  defp exception_module(:error, %{__struct__: mod}), do: mod
+  defp exception_module(:throw, _reason), do: :throw
+  defp exception_module(:exit, _reason), do: :exit
+  defp exception_module(_, _), do: :unknown
+
+  @max_message_chars 500
+
+  defp bounded_message(:error, exception) do
+    truncate(Exception.message(exception), @max_message_chars)
+  rescue
+    _ -> ""
+  end
+
+  defp bounded_message(:throw, reason), do: truncate(inspect(reason), @max_message_chars)
+  defp bounded_message(:exit, reason), do: truncate(inspect(reason), @max_message_chars)
+  defp bounded_message(_, reason), do: truncate(inspect(reason), @max_message_chars)
+
+  defp truncate(s, max) when byte_size(s) <= max, do: s
+  defp truncate(s, max), do: binary_part(s, 0, max) <> "…"
+
+  defp top_stack_frames(stacktrace, count) when is_list(stacktrace) do
+    stacktrace
+    |> Enum.take(count)
+    |> Enum.map(fn {mod, fun, arity_or_args, location} ->
+      arity = if is_list(arity_or_args), do: length(arity_or_args), else: arity_or_args
+
+      %{
+        module: mod,
+        function: fun,
+        arity: arity,
+        file: Keyword.get(location, :file),
+        line: Keyword.get(location, :line)
+      }
+    end)
   end
 
   # ──────────────────────────────────────────────────────────────────────────

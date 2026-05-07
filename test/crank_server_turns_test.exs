@@ -732,7 +732,7 @@ defmodule Crank.Server.TurnsTest do
     # invisible. Fix: each `safe_run/2` call emits
     # `[:crank, :server_turns, :cleanup_failure]` telemetry with
     # the failing label, kind, reason, and stacktrace.
-    test "safe_run/2 emits cleanup_failure telemetry on raise" do
+    test "safe_run/2 emits redacted cleanup_failure telemetry on raise" do
       handler_id = "test-cleanup-failure-#{System.unique_integer()}"
       parent = self()
 
@@ -751,14 +751,21 @@ defmodule Crank.Server.TurnsTest do
         assert_receive {:cleanup_failure, metadata}, 100
         assert metadata.label == :test_label
         assert metadata.kind == :error
-        assert %ArgumentError{message: "boom"} = metadata.reason
-        assert is_list(metadata.stacktrace)
+        assert metadata.exception_module == ArgumentError
+        assert metadata.message == "boom"
+        assert is_list(metadata.top_frames)
+        assert metadata.top_frames != []
+        # Raw `reason` and full `stacktrace` keys must NOT be in
+        # metadata — that's the redaction we're pinning. Codex
+        # review #16 (2026-05-08).
+        refute Map.has_key?(metadata, :reason)
+        refute Map.has_key?(metadata, :stacktrace)
       after
         :telemetry.detach(handler_id)
       end
     end
 
-    test "safe_run/2 emits cleanup_failure telemetry on throw" do
+    test "safe_run/2 emits redacted cleanup_failure telemetry on throw" do
       handler_id = "test-cleanup-throw-#{System.unique_integer()}"
       parent = self()
 
@@ -777,7 +784,37 @@ defmodule Crank.Server.TurnsTest do
         assert_receive {:cleanup_failure, metadata}, 100
         assert metadata.label == :test_throw
         assert metadata.kind == :throw
-        assert metadata.reason == :nope
+        assert metadata.exception_module == :throw
+        assert metadata.message == ":nope"
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "safe_run/2 truncates oversized exception messages" do
+      handler_id = "test-cleanup-trunc-#{System.unique_integer()}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:crank, :server_turns, :cleanup_failure],
+        fn _name, _measurements, metadata, _config ->
+          send(parent, {:cleanup_failure, metadata})
+        end,
+        nil
+      )
+
+      try do
+        # 5,000-character exception message — must be truncated.
+        big_msg = String.duplicate("x", 5_000)
+
+        :ok = ServerTurns.safe_run(:test_trunc, fn -> raise ArgumentError, big_msg end)
+
+        assert_receive {:cleanup_failure, metadata}, 100
+        # The bound is 500 chars + ellipsis; allow a small margin
+        # for the ellipsis byte representation.
+        assert byte_size(metadata.message) <= 510
+        assert String.ends_with?(metadata.message, "…")
       after
         :telemetry.detach(handler_id)
       end
