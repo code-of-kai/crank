@@ -203,15 +203,33 @@ defmodule Crank.Server.Turns do
             "#{inspect(other)} — expected a pid, registered name, or {name, node} tuple"
   end
 
-  # Lazily monitor each unique server. Duplicate-target steps reuse the ref.
+  # Monitor each server fresh per step. A previous version cached the
+  # ref across steps targeting the same server key, but for
+  # registered-name targets the underlying pid can change between
+  # steps (e.g. supervisor restart) — the cached ref points at the
+  # dead prior incarnation, leaks a stale `:DOWN` into the mailbox,
+  # and the next step's `check_for_down/1` falsely attributes that
+  # stop to the wrong (succeeding) turn.
+  #
+  # `Process.demonitor(ref, [:flush])` removes any pending `:DOWN`
+  # for the old ref, then we re-monitor against the current
+  # registration. The cost is two BIF calls per step — negligible
+  # relative to the cross-process call we're about to make.
+  #
+  # Applies uniformly to pid, registered-atom, and {name, node}
+  # targets. For pids the demonitor is a no-op-equivalent (pid never
+  # reincarnates), but the symmetry is worth more than the saved
+  # round-trip.
   defp ensure_monitor(server, monitors) do
     case Map.get(monitors, server) do
       nil ->
         ref = Process.monitor(server)
         {ref, Map.put(monitors, server, ref)}
 
-      ref ->
-        {ref, monitors}
+      old_ref ->
+        Process.demonitor(old_ref, [:flush])
+        ref = Process.monitor(server)
+        {ref, Map.put(monitors, server, ref)}
     end
   end
 

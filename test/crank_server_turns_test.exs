@@ -473,6 +473,90 @@ defmodule Crank.Server.TurnsTest do
   end
 
   # ──────────────────────────────────────────────────────────────────────────
+  # Registered-name restart between steps (Codex review #8)
+  # ──────────────────────────────────────────────────────────────────────────
+
+  describe "apply/1 — registered name with restart between steps" do
+    # If a registered-name target restarts between steps and the
+    # monitor ref is reused from the old (dead) incarnation, the
+    # second step would falsely fail when `check_for_down/1`
+    # consumes the stale `:DOWN` from the prior process. Fix:
+    # `ensure_monitor/2` always demonitors with `[:flush]` and
+    # re-monitors so each turn observes only the current
+    # incarnation.
+
+    defmodule SimpleEcho do
+      use Crank
+
+      @impl true
+      def start(_), do: {:ok, :idle, %{count: 0}}
+
+      @impl true
+      def turn(:tick, :idle, memory) do
+        {:stay, %{memory | count: memory.count + 1}}
+      end
+
+      @impl true
+      def reading(:idle, memory), do: %{count: memory.count}
+    end
+
+    test "second step against a restarted server is not falsely failed by stale :DOWN" do
+      name = :"crank_turns_restart_test_#{System.unique_integer([:positive])}"
+
+      {:ok, pid_a} = Crank.Server.start_link(SimpleEcho, [], name: name)
+
+      # Step A: a single turn against the registered-name target.
+      # apply/2 monitors and (with the bug) caches the ref keyed by
+      # the registered name.
+      {:ok, results_a} =
+        Turns.new()
+        |> Turns.turn(:a, name, :tick)
+        |> ServerTurns.apply()
+
+      assert results_a.a == %{count: 1}
+
+      # Stop pid_a and start a fresh server under the same name.
+      # This is the registered-name restart pattern: the name
+      # outlives the process incarnation.
+      Process.unlink(pid_a)
+      Crank.Server.stop(pid_a)
+      assert_eventually(fn -> Process.whereis(name) == nil end)
+
+      {:ok, pid_b} = Crank.Server.start_link(SimpleEcho, [], name: name)
+      assert pid_a != pid_b
+
+      # Step B: a turn against the same registered name. Should hit
+      # pid_b cleanly. Without the demonitor+re-monitor fix, the
+      # cached old ref from pid_a's monitor could leak a stale
+      # `:DOWN` into `check_for_down/1`'s window and falsely fail.
+      result_b =
+        Turns.new()
+        |> Turns.turn(:b, name, :tick)
+        |> ServerTurns.apply()
+
+      Crank.Server.stop(pid_b)
+
+      assert {:ok, results_b} = result_b,
+             "expected clean success against restarted server, got: #{inspect(result_b)}"
+
+      assert results_b.b == %{count: 1},
+             "step B should observe a fresh memory.count, got #{inspect(results_b.b)}"
+    end
+
+    defp assert_eventually(check, attempts \\ 50)
+    defp assert_eventually(check, 0), do: assert(check.(), "condition never became true")
+
+    defp assert_eventually(check, attempts) do
+      if check.() do
+        :ok
+      else
+        Process.sleep(10)
+        assert_eventually(check, attempts - 1)
+      end
+    end
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Integration — realistic multi-machine command in process mode
   # ──────────────────────────────────────────────────────────────────────────
 
