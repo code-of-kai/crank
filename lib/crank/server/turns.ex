@@ -171,25 +171,49 @@ defmodule Crank.Server.Turns do
     end
   end
 
-  # Wait briefly for a :DOWN on this specific ref. Erlang guarantees :DOWN
-  # arrives after the last message from the monitored process, so if the
-  # server stopped in this turn (reply-then-stop), the :DOWN is in-transit
-  # immediately after our call returned.
+  # Wait for a :DOWN on this specific ref. Erlang's monitor-ordering
+  # guarantee says :DOWN arrives after the last message from the
+  # monitored process, so if the server stopped during this turn
+  # (reply-then-stop), the :DOWN is in-transit immediately after our
+  # call returned. The wait window absorbs scheduler latency between
+  # "reply sent" and "BEAM emits :DOWN".
   #
-  # `:erlang.yield/0` voluntarily gives up scheduler time so the dying
-  # server's termination can complete before we check. Without it, a short
-  # `receive after N` can race scheduler latency under load.
+  # `:erlang.yield/0` gives up scheduler time so the dying server's
+  # termination can complete before we check.
   #
-  # Returns the exit reason if :DOWN arrived, or nil if the server is alive.
-  # Messages for other refs are left in the mailbox untouched.
-  @down_wait_ms 10
+  # **Residual race (acknowledged, ROADMAP for v2.1).** Under extreme
+  # scheduler pressure the BEAM may not deliver :DOWN within
+  # `@down_total_wait_ms`. The cleanly correct fix is to embed the
+  # engine state in the synchronous reply contract — that's an API
+  # change deferred to v2.1. For v2.0.x we use a generous deadline:
+  # 100ms total, polled in 20ms slices so we yield repeatedly rather
+  # than blocking once. In practice the :DOWN arrives in the first
+  # slice on idle systems and within 1–2 slices on loaded CI runners.
+  #
+  # Returns the exit reason if :DOWN arrived, or nil if the server is
+  # alive. Messages for other refs are left in the mailbox untouched.
+  @down_slice_ms 20
+  @down_total_wait_ms 100
+
   defp check_for_down(ref) do
+    deadline = :erlang.monotonic_time(:millisecond) + @down_total_wait_ms
+    poll_for_down(ref, deadline)
+  end
+
+  defp poll_for_down(ref, deadline) do
     :erlang.yield()
+    remaining = max(deadline - :erlang.monotonic_time(:millisecond), 0)
+    slice = min(remaining, @down_slice_ms)
 
     receive do
       {:DOWN, ^ref, _, _, reason} -> reason
     after
-      @down_wait_ms -> nil
+      slice ->
+        if remaining > slice do
+          poll_for_down(ref, deadline)
+        else
+          nil
+        end
     end
   end
 

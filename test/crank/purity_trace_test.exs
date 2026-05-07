@@ -124,6 +124,37 @@ defmodule Crank.PurityTraceTest do
     end
   end
 
+  # ── Flush telemetry (Codex review #4 finding 2) ───────────────────────────
+
+  describe "flush_trace timeout telemetry" do
+    # The flush is "best effort with visibility" — a 5-second cap is
+    # generous, but if it's hit, projects need to know. Telemetry
+    # is the signalling channel: if the event fires for a verdict,
+    # treat that verdict as based on a possibly-incomplete trace.
+    test "happy path produces no flush_timeout telemetry" do
+      ref = make_ref()
+      parent = self()
+
+      :telemetry.attach(
+        "test-flush-#{inspect(ref)}",
+        [:crank, :purity_trace, :flush_timeout],
+        fn _name, measurements, metadata, _ ->
+          send(parent, {:flush_timeout, ref, measurements, metadata})
+        end,
+        nil
+      )
+
+      try do
+        assert {:ok, 4, _} =
+                 PurityTrace.trace_pure(fn -> 2 + 2 end, forbidden_modules: @rand_only)
+
+        refute_receive {:flush_timeout, ^ref, _, _}, 100
+      after
+        :telemetry.detach("test-flush-#{inspect(ref)}")
+      end
+    end
+  end
+
   # ── Gate 4: non-termination ───────────────────────────────────────────────
 
   describe "non-termination (CRANK_RUNTIME_002)" do
@@ -138,6 +169,40 @@ defmodule Crank.PurityTraceTest do
                  timeout: 100,
                  forbidden_modules: @rand_only
                )
+    end
+
+    # Codex review #4 (2026-05-07) finding 1: a chatty impure loop
+    # that emits trace events forever should still time out. The
+    # original `receive ... after timeout` reset its budget on every
+    # message; absolute deadlines force termination regardless of
+    # trace volume.
+    #
+    # Fixture is a tail-recursive infinite loop that calls
+    # `DateTime.utc_now/0` — generates a trace event every cycle
+    # without accumulating heap (heap-exhaustion would race the
+    # wall-clock timeout we're trying to assert).
+    defmodule ChattyImpure do
+      @moduledoc false
+      def loop do
+        _ = DateTime.utc_now()
+        loop()
+      end
+    end
+
+    test "chatty impure loop emitting traced calls still times out" do
+      started_at = :erlang.monotonic_time(:millisecond)
+
+      result =
+        PurityTrace.trace_pure(&ChattyImpure.loop/0,
+          timeout: 200,
+          forbidden_modules: [{DateTime, :utc_now, :_}]
+        )
+
+      elapsed = :erlang.monotonic_time(:millisecond) - started_at
+
+      assert {:resource_exhausted, :timeout, _trace} = result
+      assert elapsed < 5_000,
+             "expected timeout within ~200ms + overhead, took #{elapsed}ms — relative-per-message timeout regression?"
     end
 
     test "long-running computation that exceeds timeout is killed" do

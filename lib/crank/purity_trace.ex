@@ -366,12 +366,24 @@ defmodule Crank.PurityTrace do
   # ── Collection loop ───────────────────────────────────────────────────────
 
   defp collect_loop(worker, monitor_ref, timeout, trace_acc, allow, session) do
+    deadline = monotonic_ms() + timeout
+    do_collect(worker, monitor_ref, deadline, trace_acc, allow, session)
+  end
+
+  # Each iteration computes the *remaining* time until the absolute
+  # deadline rather than using the original timeout. Without this, a
+  # user fun that emits traced calls forever resets the after-clock on
+  # every message and the timeout path is unreachable. With absolute
+  # deadlines, the timeout fires regardless of trace volume.
+  defp do_collect(worker, monitor_ref, deadline, trace_acc, allow, session) do
+    remaining = max(deadline - monotonic_ms(), 0)
+
     receive do
       {:trace, ^worker, :call, mfa} ->
-        collect_loop(worker, monitor_ref, timeout, [{:call, mfa} | trace_acc], allow, session)
+        do_collect(worker, monitor_ref, deadline, [{:call, mfa} | trace_acc], allow, session)
 
       {:trace, ^worker, :return_to, _} ->
-        collect_loop(worker, monitor_ref, timeout, trace_acc, allow, session)
+        do_collect(worker, monitor_ref, deadline, trace_acc, allow, session)
 
       {:DOWN, ^monitor_ref, :process, ^worker, reason} ->
         # Flush in-flight trace messages from the BEAM's per-session buffer
@@ -383,7 +395,7 @@ defmodule Crank.PurityTrace do
         final_trace = drain_trace(worker, trace_acc)
         finalize_down(reason, Enum.reverse(final_trace), allow)
     after
-      timeout ->
+      remaining ->
         Process.exit(worker, :kill)
 
         receive do
@@ -398,16 +410,35 @@ defmodule Crank.PurityTrace do
     end
   end
 
+  defp monotonic_ms, do: :erlang.monotonic_time(:millisecond)
+
+  # Flush is the synchronisation barrier between the BEAM's per-session
+  # trace buffer and our mailbox. Under normal conditions it completes
+  # in microseconds. The 5-second cap is generous to absorb legitimate
+  # scheduler pressure (CI under high concurrency); a timeout here
+  # almost always indicates a genuinely overloaded VM, not a happy
+  # path. Emit `[:crank, :purity_trace, :flush_timeout]` telemetry so
+  # projects can detect when the flush window is exceeded — that's
+  # the signal that a verdict may be based on a partial trace.
+  @flush_timeout_ms 5_000
   defp flush_trace(session, worker) do
     # `:trace.delivered/2` posts the reply `{:trace_delivered, worker, ref}`
     # to the caller's mailbox. Call it directly from this process (not
     # through the coordinator), or the reply ends up in the wrong inbox.
     flush_ref = :trace.delivered(session, worker)
+    started_at = monotonic_ms()
 
     receive do
       {:trace_delivered, ^worker, ^flush_ref} -> :ok
     after
-      500 -> :ok
+      @flush_timeout_ms ->
+        :telemetry.execute(
+          [:crank, :purity_trace, :flush_timeout],
+          %{elapsed_ms: monotonic_ms() - started_at},
+          %{worker: worker, session: session, timeout_ms: @flush_timeout_ms}
+        )
+
+        :ok
     end
   end
 

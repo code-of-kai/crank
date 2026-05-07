@@ -83,3 +83,13 @@ The current enforcement story (compile-time call-site checks, Boundary topology,
 **Why it matters.** Pushes the static-detection coverage closer to soundness for the categories where the call graph is statically resolvable. Combined with effect typing (top of this list), this would close most of the residual gap.
 
 **Blocker.** Function-call-graph cuts are a known-hard problem in dynamic languages. Boundary's authors looked at this and chose module-level granularity for reachability and stability. A Crank-side function-call-graph cut would need to handle dynamic dispatch (`apply/3`), behaviours, and protocol implementations without false-positive explosion. Not impossible, but a substantial body of work; ships only with a detailed design that has been validated against representative codebases.
+
+---
+
+## Synchronous engine state in `Crank.Server.turn/2,3` reply
+
+**What.** Today `Crank.Server.Turns` detects "did this step stop the server?" by monitoring the server and waiting for `:DOWN` after each turn. This is a deadline-based receive — sound under normal load, but under extreme scheduler pressure the BEAM may not deliver `:DOWN` within the wait window, so the next step runs against a server that's already dying.
+
+**Why it matters.** Halt-on-first-stop is the documented contract. Race conditions in stop detection produce wrong failing-step attribution and can apply turns past the intended halt point.
+
+**Blocker.** Deterministic stop detection requires changing the reply contract. Today `gen_statem.call/3` returns whatever `c:reading/2` produces; the engine state is implicit. Embedding `{reading, engine}` in the reply would close the race but breaks the existing API. v2.1 is the right time to introduce a parallel `Crank.Server.turn_with_engine/3` (explicit two-tuple return) and migrate `Crank.Server.Turns` to use it. The `:DOWN`-based path stays as a fallback for the existing `turn/2,3` API.
