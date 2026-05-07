@@ -566,6 +566,85 @@ defmodule Crank.Server.TurnsTest do
              "step :b should observe a fresh memory.count from the new pid, got #{inspect(results.b)}"
     end
 
+    # Codex review #10 (2026-05-08): the previous version caught
+    # `:exit` only. A resolver that raised an arbitrary exception
+    # propagated up without running cleanup, leaving stale `:DOWN`
+    # in the caller's mailbox. The fix wraps the apply body in a
+    # top-level `try/after` (state threaded through the process
+    # dict so the after-handler can see the latest ref_steps).
+    test "raise during step resolver does not leak :DOWN into caller mailbox" do
+      name = :"crank_turns_raise_cleanup_#{System.unique_integer([:positive])}"
+      {:ok, pid} = Crank.Server.start_link(SimpleEcho, [], name: name)
+
+      try do
+        # Step :a runs cleanly (creates a monitor). Step :b's
+        # resolver raises an ArgumentError before the turn call —
+        # this is not caught by the `catch :exit` clause.
+        assert_raise ArgumentError, "boom from resolver", fn ->
+          Turns.new()
+          |> Turns.turn(:a, name, :tick)
+          |> Turns.turn(
+            :b,
+            fn _prior -> raise ArgumentError, "boom from resolver" end,
+            :tick
+          )
+          |> ServerTurns.apply()
+        end
+
+        # After the raise, stop the server. With the old code this
+        # `:DOWN` would land in the test process's mailbox because
+        # cleanup was bypassed. With the after-block fix, every ref
+        # created during the apply was already demonitored with
+        # `[:flush]` — the :DOWN is suppressed.
+        Crank.Server.stop(pid)
+
+        refute_receive {:DOWN, _, :process, _, _}, 200
+      after
+        if Process.alive?(pid), do: Crank.Server.stop(pid)
+      end
+    end
+
+    # Sibling check for `:throw` and arbitrary `error` raises: the
+    # `try/after` in apply/2 should run cleanup regardless of which
+    # exception kind escapes the body.
+    test "throw during resolver also runs cleanup" do
+      name = :"crank_turns_throw_cleanup_#{System.unique_integer([:positive])}"
+      {:ok, pid} = Crank.Server.start_link(SimpleEcho, [], name: name)
+
+      try do
+        catch_throw(
+          Turns.new()
+          |> Turns.turn(:a, name, :tick)
+          |> Turns.turn(:b, fn _ -> throw(:boom) end, :tick)
+          |> ServerTurns.apply()
+        )
+
+        Crank.Server.stop(pid)
+        refute_receive {:DOWN, _, :process, _, _}, 200
+      after
+        if Process.alive?(pid), do: Crank.Server.stop(pid)
+      end
+    end
+
+    test "process dict key is cleared after apply returns" do
+      # Sanity check: the apply-scoped process-dict slot doesn't
+      # leak past `apply/2`. Otherwise any caller observing their
+      # own dict would see Crank's accumulator after the call.
+      name = :"crank_turns_dict_cleanup_#{System.unique_integer([:positive])}"
+      {:ok, pid} = Crank.Server.start_link(SimpleEcho, [], name: name)
+
+      try do
+        {:ok, _} =
+          Turns.new()
+          |> Turns.turn(:a, name, :tick)
+          |> ServerTurns.apply()
+
+        assert Process.get({Crank.Server.Turns, :ref_steps}) == nil
+      after
+        Crank.Server.stop(pid)
+      end
+    end
+
     test "late-DOWN telemetry still fires when a server stops between same-apply steps" do
       # The previous iteration's [:flush] in ensure_monitor swallowed
       # the stale :DOWN that drain_late_down was meant to surface,

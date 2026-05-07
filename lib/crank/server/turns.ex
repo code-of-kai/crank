@@ -95,32 +95,44 @@ defmodule Crank.Server.Turns do
   `{name, node}` tuple. Dependency resolvers receive the map of prior
   readings keyed by step name.
   """
+  # Process-dictionary key holding the accumulating ref_steps map
+  # for the in-flight apply. We use the process dict (sparingly,
+  # bounded to this function's lifetime) so the top-level
+  # `try/after` can read the latest state for cleanup regardless of
+  # which exception type — `:exit`, `:error`, `:throw` — escapes
+  # the recursive body. Threading state via function args alone
+  # cannot reach the after-handler when the deep recursion frame is
+  # unwound by an exception.
+  @ref_steps_key {__MODULE__, :ref_steps}
+
   @spec apply(Turns.t(), timeout()) :: apply_result()
   def apply(%Turns{} = turns, timeout \\ 5_000) do
     steps = Turns.to_list(turns)
-    do_apply(steps, %{}, %{}, %{}, timeout)
+    Process.put(@ref_steps_key, %{})
+
+    try do
+      do_apply(steps, %{}, %{}, timeout)
+    after
+      ref_steps = Process.delete(@ref_steps_key) || %{}
+      drain_late_down(ref_steps)
+      flush_all_refs(ref_steps)
+    end
   end
 
   # ──────────────────────────────────────────────────────────────────────────
   # Core loop
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp do_apply([], results, _monitors, ref_steps, _timeout) do
-    finish({:ok, results}, ref_steps)
+  defp do_apply([], results, _monitors, _timeout) do
+    {:ok, results}
   end
 
-  defp do_apply([{name, machine_res, event_res} | rest], results, monitors, ref_steps, timeout) do
+  defp do_apply([{name, machine_res, event_res} | rest], results, monitors, timeout) do
     server = resolve(machine_res, results)
     validate_server!(server, name)
     event = resolve(event_res, results)
     {ref, monitors} = ensure_monitor(server, monitors)
-
-    # Track every ref the apply ever created — including the one
-    # for this step before we know its outcome. `finish/3` uses
-    # this to flush all monitor handles uniformly, regardless of
-    # which path (success, stop-reason, exit-during-call) we exit
-    # through.
-    ref_steps = Map.put(ref_steps, ref, %{step: name, server: server})
+    track_ref(ref, name, server)
 
     try do
       reading = Crank.Server.turn(server, event, timeout)
@@ -129,24 +141,32 @@ defmodule Crank.Server.Turns do
         nil ->
           # Server is alive (or any :DOWN for it arrives beyond the window,
           # which would only happen for causes unrelated to this turn).
-          do_apply(rest, Map.put(results, name, reading), monitors, ref_steps, timeout)
+          do_apply(rest, Map.put(results, name, reading), monitors, timeout)
 
         reason ->
           # Turn delivered the reading, but the server stopped as a
           # consequence (e.g., stop_and_reply).
-          finish({:error, name, reason, Map.put(results, name, reading)}, ref_steps)
+          {:error, name, reason, Map.put(results, name, reading)}
       end
     catch
       :exit, exit_reason ->
         # Pre-existing death, timeout, or crash without reply.
-        finish({:error, name, {:server_exit, exit_reason}, results}, ref_steps)
+        {:error, name, {:server_exit, exit_reason}, results}
     end
   end
 
-  # Single-shot end-of-apply cleanup. Drains any late `:DOWN`
-  # messages that arrived during the run (emitting telemetry), then
-  # flushes any remaining monitor handles for every ref ever
-  # created during the apply (not just the latest per server).
+  # Append a ref to the in-flight ref_steps map held in the process
+  # dict. Reading + writing keeps the apply-scoped accumulator
+  # accessible to the top-level `after` handler.
+  defp track_ref(ref, step, server) do
+    current = Process.get(@ref_steps_key, %{})
+    Process.put(@ref_steps_key, Map.put(current, ref, %{step: step, server: server}))
+  end
+
+  # End-of-apply cleanup. Drains any late `:DOWN` messages that
+  # arrived during the run (emitting telemetry), then flushes any
+  # remaining monitor handles for every ref ever created during
+  # the apply (not just the latest per server).
   #
   # Order matters: drain first (consumes & emits telemetry for
   # arrived `:DOWN`s), flush second (cleans up the monitor handles
@@ -162,11 +182,15 @@ defmodule Crank.Server.Turns do
   # review #7 flagged that as a latency cliff under load. A single
   # drain at completion produces the same telemetry visibility at
   # O(N) total cost, paid once.
-  defp finish(result, ref_steps) do
-    drain_late_down(ref_steps)
-    flush_all_refs(ref_steps)
-    result
-  end
+  #
+  # Why in `apply/2`'s `after` block, not in `do_apply/4`'s success
+  # and error returns? Codex review #10 noticed that non-`:exit`
+  # exceptions (a resolver function raising, `validate_server!/2`
+  # raising, etc.) bypass the inner `catch :exit` clause and
+  # propagate up the call stack — bypassing any cleanup expressed
+  # at the do_apply level and leaking stale `:DOWN` messages into
+  # the caller's mailbox. The `after` block guarantees cleanup
+  # runs no matter what exception type escapes.
 
   defp flush_all_refs(ref_steps) do
     Enum.each(ref_steps, fn {ref, _} -> Process.demonitor(ref, [:flush]) end)
