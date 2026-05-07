@@ -134,31 +134,59 @@ defmodule Crank.Server.Turns do
     try do
       do_apply(steps, %{}, %{}, call_key, timeout)
     after
-      # Cleanup is best-effort and decomposed: each of drain,
-      # flush, and slot-delete is wrapped independently so one
-      # failure doesn't block the others. The unique per-call key
-      # (see `@ref_steps_key` doc) makes accidental slot
-      # corruption structurally impossible; the per-step try-blocks
-      # here are defense-in-depth against unanticipated raises in
-      # `:trace`-related telemetry handlers or BIF edge cases. They
-      # do NOT defend against deliberate sabotage of the live slot
+      # Cleanup is best-effort and decomposed: drain, flush, and
+      # slot-delete each run independently so one failure doesn't
+      # block the others. The unique per-call key (see
+      # `@ref_steps_key` doc) makes accidental slot corruption
+      # structurally impossible; the per-step `safe_run/2` wrapping
+      # is defense-in-depth against unanticipated raises in
+      # `:trace`-related code or BIF edge cases.
+      #
+      # Failures are NOT silently swallowed: each catch emits
+      # `[:crank, :server_turns, :cleanup_failure]` telemetry with
+      # the failing step's label, exception kind, reason, and
+      # stacktrace. Projects monitoring that event can detect
+      # mailbox-hygiene compromises that the return value can't
+      # otherwise express.
+      #
+      # The wrapping does NOT defend against deliberate sabotage
       # (a resolver iterating `Process.get/0`, finding the unique
-      # key, and mutating the value) — that's out of scope per the
-      # Crank threat model. See `goals/non-goals` in
-      # `plans/purity-enforcement.md`.
+      # key, and mutating the value). That's out of scope per the
+      # Crank threat model — see `plans/purity-enforcement.md`.
       ref_steps = Process.get(slot, %{})
-      safe_run(fn -> drain_late_down(ref_steps) end)
-      safe_run(fn -> flush_all_refs(ref_steps) end)
+      safe_run(:drain_late_down, fn -> drain_late_down(ref_steps) end)
+      safe_run(:flush_all_refs, fn -> flush_all_refs(ref_steps) end)
       Process.delete(slot)
     end
   end
 
-  defp safe_run(fun) do
+  @doc """
+  Runs `fun` and reports any exception via
+  `[:crank, :server_turns, :cleanup_failure]` telemetry instead of
+  letting it propagate. Returns `:ok` regardless.
+
+  Public so tests can drive the helper directly with a raising
+  function and verify telemetry fires; in production it's only
+  called from `apply/2`'s after-block.
+  """
+  @spec safe_run(atom(), (-> any())) :: :ok
+  def safe_run(label, fun) when is_atom(label) and is_function(fun, 0) do
     fun.()
+    :ok
   rescue
-    _ -> :ok
+    e -> emit_cleanup_failure(label, :error, e, __STACKTRACE__)
   catch
-    _, _ -> :ok
+    kind, reason -> emit_cleanup_failure(label, kind, reason, __STACKTRACE__)
+  end
+
+  defp emit_cleanup_failure(label, kind, reason, stacktrace) do
+    :telemetry.execute(
+      [:crank, :server_turns, :cleanup_failure],
+      %{},
+      %{label: label, kind: kind, reason: reason, stacktrace: stacktrace}
+    )
+
+    :ok
   end
 
   # ──────────────────────────────────────────────────────────────────────────

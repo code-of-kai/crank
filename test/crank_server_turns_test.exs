@@ -726,6 +726,84 @@ defmodule Crank.Server.TurnsTest do
       end
     end
 
+    # Codex review #15 (2026-05-08): the previous best-effort
+    # wrapping silently converted any cleanup raise into `:ok`.
+    # That's hostile to operators — a real failure becomes
+    # invisible. Fix: each `safe_run/2` call emits
+    # `[:crank, :server_turns, :cleanup_failure]` telemetry with
+    # the failing label, kind, reason, and stacktrace.
+    test "safe_run/2 emits cleanup_failure telemetry on raise" do
+      handler_id = "test-cleanup-failure-#{System.unique_integer()}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:crank, :server_turns, :cleanup_failure],
+        fn _name, _measurements, metadata, _config ->
+          send(parent, {:cleanup_failure, metadata})
+        end,
+        nil
+      )
+
+      try do
+        :ok = ServerTurns.safe_run(:test_label, fn -> raise ArgumentError, "boom" end)
+
+        assert_receive {:cleanup_failure, metadata}, 100
+        assert metadata.label == :test_label
+        assert metadata.kind == :error
+        assert %ArgumentError{message: "boom"} = metadata.reason
+        assert is_list(metadata.stacktrace)
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "safe_run/2 emits cleanup_failure telemetry on throw" do
+      handler_id = "test-cleanup-throw-#{System.unique_integer()}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:crank, :server_turns, :cleanup_failure],
+        fn _name, _measurements, metadata, _config ->
+          send(parent, {:cleanup_failure, metadata})
+        end,
+        nil
+      )
+
+      try do
+        :ok = ServerTurns.safe_run(:test_throw, fn -> throw(:nope) end)
+
+        assert_receive {:cleanup_failure, metadata}, 100
+        assert metadata.label == :test_throw
+        assert metadata.kind == :throw
+        assert metadata.reason == :nope
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "safe_run/2 returns :ok and emits no telemetry on happy path" do
+      handler_id = "test-cleanup-ok-#{System.unique_integer()}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:crank, :server_turns, :cleanup_failure],
+        fn _name, _measurements, _metadata, _config ->
+          send(parent, :unexpected)
+        end,
+        nil
+      )
+
+      try do
+        assert :ok == ServerTurns.safe_run(:test_ok, fn -> :result end)
+        refute_receive :unexpected, 50
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
     test "process dict slots are cleared after apply returns" do
       # Sanity check: the apply-scoped per-call slots don't leak
       # past `apply/2`. Walk the entire process dictionary and
