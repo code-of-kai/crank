@@ -220,8 +220,6 @@ defmodule Crank.Server.Turns do
   defp bounded_message(:exit, reason), do: truncate(inspect(reason), @max_message_chars)
   defp bounded_message(_, reason), do: truncate(inspect(reason), @max_message_chars)
 
-  defp truncate(s, max_bytes) when byte_size(s) <= max_bytes, do: s
-
   # Codex review #20 (2026-05-08): `binary_part/3` cuts at byte
   # boundaries and would produce invalid UTF-8 if the cut landed
   # mid-codepoint. Telemetry handlers serialising metadata to
@@ -231,6 +229,24 @@ defmodule Crank.Server.Turns do
   #
   # Walk codepoints, accumulating until the next one would exceed
   # the byte budget. Output is always valid UTF-8 by construction.
+  #
+  # Codex review #21 (2026-05-08): the original fast path
+  # (`byte_size(s) <= max_bytes` returns `s` unchanged) skipped
+  # UTF-8 validation. A custom exception's `message/1` callback
+  # can return arbitrary bytes — short invalid binaries would
+  # pass through and crash JSON encoders downstream. The fast
+  # path now requires `String.valid?/1`; otherwise we fall
+  # through to the codepoint walker, which stops at the first
+  # malformed byte (the `_invalid_remainder` clause) and emits
+  # a valid prefix.
+  defp truncate(s, max_bytes) when byte_size(s) <= max_bytes do
+    if String.valid?(s) do
+      s
+    else
+      truncate_to_bytes(s, max_bytes, <<>>)
+    end
+  end
+
   defp truncate(s, max_bytes) do
     truncate_to_bytes(s, max_bytes, <<>>) <> "…"
   end

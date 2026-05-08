@@ -791,6 +791,45 @@ defmodule Crank.Server.TurnsTest do
       end
     end
 
+    # Codex review #21 (2026-05-08): the byte-size fast path in
+    # truncate/2 skipped UTF-8 validation. A custom exception
+    # whose `message/1` callback returned a short invalid binary
+    # would pass through unchanged. Fix: short binaries also
+    # require `String.valid?/1` before the early return.
+    defmodule InvalidMessageError do
+      defexception []
+      def message(_), do: <<255, 254, 253>>
+    end
+
+    test "safe_run/2 sanitizes short invalid-UTF-8 messages too" do
+      handler_id = "test-cleanup-short-invalid-#{System.unique_integer()}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:crank, :server_turns, :cleanup_failure],
+        fn _name, _measurements, metadata, _config ->
+          send(parent, {:cleanup_failure, metadata})
+        end,
+        nil
+      )
+
+      try do
+        :ok =
+          ServerTurns.safe_run(:test_short_invalid, fn ->
+            raise InvalidMessageError
+          end)
+
+        assert_receive {:cleanup_failure, metadata}, 100
+
+        # The invalid bytes from message/1 must NOT propagate as-is.
+        assert String.valid?(metadata.message),
+               "expected valid UTF-8, got bytes: #{inspect(metadata.message, binaries: :as_binaries)}"
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
     # Codex review #20 (2026-05-08): the previous truncation used
     # `binary_part/3` and could cut mid-codepoint, producing
     # invalid UTF-8. JSON serializers in telemetry handlers crash
