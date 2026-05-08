@@ -35,7 +35,7 @@ defmodule Crank.Integration.Dep001Test do
 
     assert get_exit == 0, "mix deps.get failed: #{get_output}"
 
-    {compile_output, _exit_code} =
+    {compile_output, exit_code} =
       System.cmd("mix", ["compile", "--force"],
         cd: project_dir,
         env: [{"MIX_ENV", "test"}],
@@ -45,6 +45,14 @@ defmodule Crank.Integration.Dep001Test do
     # Violating domain → infra reference produces CRANK_DEP_001
     assert compile_output =~ "[CRANK_DEP_001]",
            "expected CRANK_DEP_001 in compile output, got:\n#{compile_output}"
+
+    # Codex review #27 (2026-05-08): CRANK_DEP_001 is cataloged at
+    # `:error` severity, so `mix compile` MUST exit non-zero even
+    # without `--warnings-as-errors`. Pre-fix the compile returned
+    # `:ok` despite emitting the diagnostic, which let topology
+    # violations slip past CI lanes that did not force warnings.
+    refute exit_code == 0,
+           "expected non-zero exit when CRANK_DEP_001 is emitted; got exit_code=#{exit_code}"
 
     assert compile_output =~ "ViolatingDomain",
            "expected ViolatingDomain to be named in the diagnostic, got:\n#{compile_output}"

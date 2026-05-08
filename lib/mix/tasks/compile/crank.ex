@@ -170,8 +170,21 @@ defmodule Mix.Tasks.Compile.Crank do
 
   defp final_status([], _opts), do: :ok
 
-  defp final_status([_ | _], opts) do
-    if Keyword.get(opts, :warnings_as_errors, false), do: :error, else: :ok
+  # Severity-aware status. CRANK_DEP_001..003 (and any other code we
+  # catalog at `:error`) MUST fail the build; otherwise topology
+  # violations silently pass `mix compile` on any lane that does not
+  # set `--warnings-as-errors`. Warning-severity diagnostics still
+  # respect the standard `warnings_as_errors` switch.
+  #
+  # Codex review #27 (2026-05-08): prior version returned `:ok` on
+  # any non-empty diagnostic list unless `warnings_as_errors` was
+  # set, allowing CRANK_DEP_* errors to pass default `mix compile`.
+  defp final_status([_ | _] = diagnostics, opts) do
+    cond do
+      Enum.any?(diagnostics, &(&1.severity == :error)) -> :error
+      Keyword.get(opts, :warnings_as_errors, false) -> :error
+      true -> :ok
+    end
   end
 
   # ── translation ────────────────────────────────────────────────────────────

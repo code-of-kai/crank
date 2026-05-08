@@ -346,8 +346,24 @@ defmodule Crank.Server.Adapter do
 
     case start_worker_task(fun) do
       {:ok, task} ->
-        outcome = Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill)
-        handle_worker_outcome(outcome, data, event, state, timeout)
+        # Codex review #27 (2026-05-08): preserve timeout provenance
+        # explicitly. The previous `Task.yield(...) || Task.shutdown(...)`
+        # idiom collapsed two distinct outcomes into one value: a
+        # `{:exit, :killed}` returned by `Task.shutdown/2` after a
+        # yield-timeout was indistinguishable from a heap-cap kill
+        # observed by `Task.yield/2`, and got misclassified as
+        # `CRANK_RUNTIME_001` (heap) instead of `CRANK_RUNTIME_002`
+        # (timeout). Branch on yield result first: if yield returned
+        # nil, the user's turn did not finish in time — that is a
+        # timeout regardless of what shutdown subsequently observed.
+        case Task.yield(task, timeout) do
+          nil ->
+            _ = Task.shutdown(task, :brutal_kill)
+            handle_worker_timeout(data, event, state, timeout)
+
+          yield_result ->
+            handle_worker_outcome(yield_result, data, event, state, timeout)
+        end
 
       :saturated ->
         # Crank.TaskSupervisor has reached max_children. This is a
@@ -416,9 +432,12 @@ defmodule Crank.Server.Adapter do
     exit(reason)
   end
 
-  defp handle_worker_outcome(nil, data, event, state, timeout) do
-    # Task.yield returned nil → timeout fired → Task.shutdown
-    # killed the worker. Mode B's defining signal.
+  # Dedicated timeout path. Reached only when `Task.yield/2` returned
+  # nil, i.e. the worker did not produce a result inside the deadline.
+  # Whatever `Task.shutdown/2` returns afterwards (`nil`,
+  # `{:exit, :killed}`, `{:exit, other}`) does not change the verdict:
+  # the user's turn missed its deadline.
+  defp handle_worker_timeout(data, event, state, timeout) do
     handle_resource_violation(self(), data, event, state, "CRANK_RUNTIME_002", {:turn_timeout, timeout})
   end
 
