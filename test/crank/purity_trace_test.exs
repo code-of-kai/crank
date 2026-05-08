@@ -254,11 +254,11 @@ defmodule Crank.PurityTraceTest do
   # ── Gate 6: concurrency-stress test (the v2 Codex blocker) ────────────────
 
   describe "concurrency-stress (100 parallel calls)" do
-    # The single most important test in Track B. The OTP 26+ session API
-    # is the reason for the 26+ baseline pin: pre-26 trace patterns are
+    # The single most important test in Track B. The OTP 27+ session API
+    # is the reason for the 27+ baseline pin: pre-27 trace patterns are
     # global and corrupt each other under parallel test runs.
     #
-    # Even on OTP 26-28 the underlying API is not fully thread-safe — the
+    # Even on OTP 27-28 the underlying API is not fully thread-safe — the
     # `Crank.PurityTrace.Coordinator` GenServer serialises every
     # `:trace.*` call to bring loss rates from ~30% to ≤1%. The residual
     # ≤1% is a known BEAM-level race that has no further user-space
@@ -596,7 +596,7 @@ defmodule Crank.PurityTraceTest do
     end
   end
 
-  # ── Session isolation (the OTP 26+ pin reason) ────────────────────────────
+  # ── Session isolation (the OTP 27+ pin reason) ────────────────────────────
 
   describe "session isolation" do
     test "session_destroy is unconditional even when fun raises" do

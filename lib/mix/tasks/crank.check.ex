@@ -24,7 +24,7 @@ defmodule Mix.Tasks.Crank.Check do
     * `--skip-test` — skip the test step. Useful for fast pre-commit
       gating on compile + credo only.
     * `--otp-release N` — synthetic override for the OTP-release check
-      used by integration tests on hosts that already run OTP 26+.
+      used by integration tests on hosts that already run OTP 27+.
 
   ## Exit code
 

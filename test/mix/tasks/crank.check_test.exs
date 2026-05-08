@@ -19,7 +19,7 @@ defmodule Mix.Tasks.Crank.CheckTest do
 
       try do
         capture_io(fn ->
-          assert {:error, 1, "CRANK_SETUP_002"} = Check.check_setup(otp_release: 25)
+          assert {:error, 1, "CRANK_SETUP_002"} = Check.check_setup(otp_release: 26)
         end)
       after
         Mix.Project.pop()
@@ -30,7 +30,7 @@ defmodule Mix.Tasks.Crank.CheckTest do
       Mix.Project.push(__MODULE__.WiredProject, "fake/mix.exs")
 
       try do
-        assert :ok = Check.check_setup(otp_release: 26)
+        assert :ok = Check.check_setup(otp_release: 27)
       after
         Mix.Project.pop()
       end
@@ -69,7 +69,7 @@ defmodule Mix.Tasks.Crank.CheckTest do
       Mix.Project.push(__MODULE__.PrependedProject, "fake/mix.exs")
 
       try do
-        assert :ok = Check.check_setup(otp_release: 26)
+        assert :ok = Check.check_setup(otp_release: 27)
       after
         Mix.Project.pop()
       end

@@ -170,13 +170,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: '26'
-          elixir-version: '1.16'
+          otp-version: '27'
+          elixir-version: '1.17'
       - run: mix deps.get
       - run: mix crank.check
 ```
 
-The OTP 26 pin is required — Crank's runtime tracing layer needs `:trace.session_create/3`, which arrived in OTP 26. Older releases produce `CRANK_SETUP_002` at boot.
+The OTP 27 pin is required — Crank's runtime tracing layer needs `:trace.session_create/3`, part of the new `:trace` module added in OTP 27. Older releases produce `CRANK_SETUP_002` at boot.
 
 ## Manual setup (without `mix crank.gen.config`)
 

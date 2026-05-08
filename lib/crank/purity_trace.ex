@@ -3,7 +3,7 @@ defmodule Crank.PurityTrace.Coordinator do
 
   # Serialises every `:trace.*` API call through one process.
   #
-  # OTP 26–28's trace API is not thread-safe across concurrent callers:
+  # OTP 27–28's trace API is not thread-safe across concurrent callers:
   # parallel `:trace.session_create/3`, `:trace.function/4`,
   # `:trace.process/4`, and `:trace.session_destroy/1` invocations cause
   # the BEAM to silently drop trace events even though the patterns and
@@ -41,7 +41,7 @@ end
 
 defmodule Crank.PurityTrace do
   @moduledoc """
-  Runs a function under an isolated OTP 26+ trace session and reports any
+  Runs a function under an isolated OTP 27+ trace session and reports any
   impure calls observed during its execution.
 
   Unlike the static call-site checks (`Crank.Check.TurnPurity`,
@@ -116,13 +116,14 @@ defmodule Crank.PurityTrace do
   scheduler-dependent; do not rely on it. The deduplicated set of MFAs is
   deterministic given the same `fun` and the same `:forbidden_modules`.
 
-  ## Why OTP 26+
+  ## Why OTP 27+
 
   `:trace.session_create/3` and the surrounding session-scoped tracing API
-  were added in OTP 26. Pre-26 trace patterns are VM-global and corrupt each
-  other under parallel ExUnit; the session API is the reason the
-  concurrency-stress test is achievable. `Crank.Application` enforces this
-  baseline at boot via `CRANK_SETUP_002`.
+  arrived in the new `:trace` module in OTP 27. Pre-27 trace patterns are
+  VM-global and corrupt each other under parallel ExUnit; the session API
+  is the reason the concurrency-stress test is achievable.
+  `Crank.Application` enforces this baseline at boot via
+  `CRANK_SETUP_002`.
   """
 
   alias Crank.Check.Blacklist

@@ -6,8 +6,8 @@ defmodule Crank.Application do
   or `:applications` list. Provides:
 
     * **OTP version guard.** Raises `CRANK_SETUP_002` at boot if the BEAM is
-      OTP < 26. `Crank.PurityTrace` requires `:trace.session_create/3` and
-      its surrounding session-scoped tracing API, which only exists in OTP 26+.
+      OTP < 27. `Crank.PurityTrace` requires `:trace.session_create/3` and
+      its surrounding session-scoped tracing API, which only exists in OTP 27+.
       Failing fast at boot beats failing deep in a property test.
     * **`Crank.TaskSupervisor`.** A dedicated `Task.Supervisor` used by
       `Crank.Server` Mode B (when `turn_timeout` is configured) to spawn
@@ -18,7 +18,7 @@ defmodule Crank.Application do
 
   use Application
 
-  @minimum_otp_release 26
+  @minimum_otp_release 27
 
   @impl true
   def start(_type, _args) do

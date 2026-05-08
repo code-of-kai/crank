@@ -224,8 +224,8 @@ defmodule Crank.Errors.Catalog do
       rule: :otp_version_too_old,
       severity: :error,
       layer: :setup,
-      short: "Runtime OTP < 26; `Crank.PurityTrace` requires trace sessions (OTP 26+).",
-      fix_category: "upgrade Erlang/OTP to 26 or later"
+      short: "Runtime OTP < 27; `Crank.PurityTrace` requires trace sessions (OTP 27+).",
+      fix_category: "upgrade Erlang/OTP to 27 or later"
     }
   ]
 

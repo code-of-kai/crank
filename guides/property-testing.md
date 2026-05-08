@@ -63,14 +63,14 @@ def assert_pure_turn(machine, events, opts \\ [])
 The helper:
 
 1. Spawns a worker process under `Crank.TaskSupervisor` (the supervisor `Crank.Application` already starts on boot).
-2. Creates an isolated trace session via `:trace.session_create/3` (OTP 26+).
+2. Creates an isolated trace session via `:trace.session_create/3` (OTP 27+).
 3. Sets trace patterns for every entry in `Crank.Check.Blacklist` (the same source of truth as the static layer).
 4. Runs the events through `Crank.turn/2` synchronously inside the worker.
 5. Collects the trace and asserts no impure calls were observed.
 6. Tears down the session unconditionally in an `ensure` block.
 7. Returns the final `%Crank{}` so the caller can chain assertions on state and memory.
 
-Each call is independent. Parallel property tests do not interfere with each other — the OTP 26+ session API guarantees per-call isolation. *(This is verified by the concurrency-stress test that ships with Track B.)*
+Each call is independent. Parallel property tests do not interfere with each other — the OTP 27+ session API guarantees per-call isolation. *(This is verified by the concurrency-stress test that ships with Track B.)*
 
 ## Reading a failure
 

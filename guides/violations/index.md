@@ -67,7 +67,7 @@ Boot-time and CI-time guards. Failing these means the project hasn't completed C
 | Code | Rule | What it catches |
 |---|---|---|
 | [CRANK_SETUP_001](CRANK_SETUP_001.md) | boundary-not-wired | Project lacks `:crank` in `:compilers`. |
-| [CRANK_SETUP_002](CRANK_SETUP_002.md) | otp-version-too-old | Runtime OTP < 26. |
+| [CRANK_SETUP_002](CRANK_SETUP_002.md) | otp-version-too-old | Runtime OTP < 27. |
 
 ## Reading order
 

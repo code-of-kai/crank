@@ -10,8 +10,8 @@ defmodule Crank.ApplicationTest do
   end
 
   describe "minimum_otp_release/0" do
-    test "is 26 (the trace-session API floor)" do
-      assert Crank.Application.minimum_otp_release() == 26
+    test "is 27 (the :trace module floor)" do
+      assert Crank.Application.minimum_otp_release() == 27
     end
   end
 

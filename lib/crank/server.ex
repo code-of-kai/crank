@@ -453,7 +453,7 @@ defmodule Crank.Server.Adapter do
     })
   end
 
-  # Wrapper around Task.Supervisor.async_nolink. On OTP 26+ the success
+  # Wrapper around Task.Supervisor.async_nolink. On OTP 27+ the success
   # path always returns `%Task{}`; saturation surfaces as a `:noproc` /
   # `{:max_children, _}` exit signal, which we trap here. The
   # tagged-tuple return shape was a historical OTP contract that no
