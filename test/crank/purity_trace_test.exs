@@ -517,6 +517,33 @@ defmodule Crank.PurityTraceTest do
       assert {:ok, _, _} =
                PurityTrace.trace_pure(fn -> 1 + 1 end, forbidden_modules: @rand_only)
     end
+
+    # Codex review #26 (2026-05-08): the set differences in
+    # `maybe_dict_violation/2` were inverted —
+    # `added` was computed as `before \ after` (which is what was
+    # REMOVED) and vice versa. Detection still fired but
+    # responders chasing `metadata.added` would look for the wrong
+    # keys. This test pins the metadata semantics: a key the user
+    # `Process.put`s should appear in `metadata.added`, never in
+    # `metadata.removed`.
+    test "CRANK_TRACE_002 metadata.added contains the keys put during the turn" do
+      added_key = :"crank_test_dict_added_#{System.unique_integer([:positive])}"
+
+      assert {:impurity, violations, _} =
+               PurityTrace.trace_pure(
+                 fn -> Process.put(added_key, :v) end,
+                 forbidden_modules: @rand_only
+               )
+
+      trace_002 = Enum.find(violations, &(&1.code == "CRANK_TRACE_002"))
+      assert trace_002
+
+      assert added_key in trace_002.metadata.added,
+             "expected #{inspect(added_key)} in metadata.added, got: #{inspect(trace_002.metadata.added)}"
+
+      refute added_key in trace_002.metadata.removed,
+             "Process.put-ed key should NOT appear in metadata.removed"
+    end
   end
 
   # ── Atom-table diff (CRANK_TRACE_001) — opt-in ────────────────────────────

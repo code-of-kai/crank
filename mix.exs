@@ -58,7 +58,8 @@ defmodule Crank.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
-      files: ~w(lib guides assets .formatter.exs mix.exs README.md LICENSE CHANGELOG.md DESIGN.md ROADMAP.md)
+      files:
+        ~w(lib priv guides assets .formatter.exs mix.exs README.md LICENSE CHANGELOG.md DESIGN.md ROADMAP.md)
     ]
   end
 

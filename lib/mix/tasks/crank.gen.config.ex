@@ -56,7 +56,26 @@ defmodule Mix.Tasks.Crank.Gen.Config do
       |> wire_credo_exs()
 
     unless quiet?, do: report(actions)
-    :ok
+
+    # Codex review #26 (2026-05-08): a `:missing` action means a
+    # required input wasn't found — most commonly the `priv/`
+    # template that was previously omitted from `package.files`.
+    # Returning `:ok` in that case left users with a silently
+    # incomplete setup. Fail fast so CI/automation surfaces the
+    # bad install state.
+    case Enum.find(actions, fn {kind, _path, _info} -> kind == :missing end) do
+      nil ->
+        :ok
+
+      {:missing, path, info} ->
+        Mix.raise(
+          "mix crank.gen.config: required input missing — #{path}\n" <>
+            "Reason: #{info}\n\n" <>
+            "If you installed Crank from Hex and this is `priv/boundary.exs.template`, " <>
+            "the published package may be missing `priv/`. Please file an issue. " <>
+            "If you're working from a path/git dep, check the dep's source tree."
+        )
+    end
   end
 
   # ── boundary.exs ───────────────────────────────────────────────────────────

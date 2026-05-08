@@ -104,6 +104,7 @@ defmodule Mix.Tasks.Crank.Gen.ConfigTest do
 
       assert File.read!(path) == "[third_party_pure: [:decimal], third_party_impure: []]\n"
     end
+
   end
 
   describe "wire_credo_exs/2" do

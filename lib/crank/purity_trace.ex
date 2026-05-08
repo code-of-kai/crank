@@ -583,8 +583,15 @@ defmodule Crank.PurityTrace do
     if MapSet.equal?(before_set, after_set) do
       []
     else
-      added = before_set |> MapSet.difference(after_set) |> MapSet.to_list()
-      removed = after_set |> MapSet.difference(before_set) |> MapSet.to_list()
+      # Codex review #26 (2026-05-08): the set differences were
+      # inverted — `added` was computed as `before \ after` (which
+      # is what was REMOVED) and vice versa. Detection still
+      # fired but the violation context/metadata sent responders
+      # toward the wrong cleanup. Correct semantics:
+      # `added` = keys present after but not before;
+      # `removed` = keys present before but not after.
+      added = after_set |> MapSet.difference(before_set) |> MapSet.to_list()
+      removed = before_set |> MapSet.difference(after_set) |> MapSet.to_list()
 
       [
         Errors.build("CRANK_TRACE_002",
