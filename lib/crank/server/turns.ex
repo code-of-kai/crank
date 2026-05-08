@@ -223,21 +223,60 @@ defmodule Crank.Server.Turns do
   defp truncate(s, max) when byte_size(s) <= max, do: s
   defp truncate(s, max), do: binary_part(s, 0, max) <> "…"
 
-  defp top_stack_frames(stacktrace, count) when is_list(stacktrace) do
+  @doc """
+  Truncates an Erlang stacktrace to the top `count` frames and
+  normalises each frame to a plain map shape suitable for
+  inclusion in telemetry metadata.
+
+  Erlang's stacktrace entry spec admits two shapes:
+
+    * `{Module, Function, Arity | Args, Location}` — named
+      function call frame.
+    * `{Fun, Arity | Args, Location}` — anonymous function call
+      frame.
+
+  Pattern-matches both and falls back to a generic shape for
+  anything outside the spec so telemetry emission cannot raise
+  on a stacktrace entry it doesn't recognise.
+
+  Public for direct testing of the redaction layer.
+  """
+  @spec top_stack_frames([term()], non_neg_integer()) :: [map()]
+  def top_stack_frames(stacktrace, count) when is_list(stacktrace) do
     stacktrace
     |> Enum.take(count)
-    |> Enum.map(fn {mod, fun, arity_or_args, location} ->
-      arity = if is_list(arity_or_args), do: length(arity_or_args), else: arity_or_args
-
-      %{
-        module: mod,
-        function: fun,
-        arity: arity,
-        file: Keyword.get(location, :file),
-        line: Keyword.get(location, :line)
-      }
-    end)
+    |> Enum.map(&format_frame/1)
   end
+
+  defp format_frame({mod, fun, arity_or_args, location})
+       when is_atom(mod) and is_atom(fun) and is_list(location) do
+    %{
+      module: mod,
+      function: fun,
+      arity: normalize_arity(arity_or_args),
+      file: Keyword.get(location, :file),
+      line: Keyword.get(location, :line)
+    }
+  end
+
+  defp format_frame({fun, arity_or_args, location})
+       when is_function(fun) and is_list(location) do
+    %{
+      module: nil,
+      function: fun,
+      arity: normalize_arity(arity_or_args),
+      file: Keyword.get(location, :file),
+      line: Keyword.get(location, :line)
+    }
+  end
+
+  defp format_frame(_other) do
+    %{module: nil, function: nil, arity: nil, file: nil, line: nil}
+  end
+
+  defp normalize_arity(arity_or_args) when is_list(arity_or_args), do: length(arity_or_args)
+  defp normalize_arity(arity) when is_integer(arity), do: arity
+  defp normalize_arity(_), do: nil
 
   # ──────────────────────────────────────────────────────────────────────────
   # Core loop

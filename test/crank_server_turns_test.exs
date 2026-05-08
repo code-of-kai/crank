@@ -820,6 +820,52 @@ defmodule Crank.Server.TurnsTest do
       end
     end
 
+    # Codex review #17 (2026-05-08): Erlang stacktrace entries
+    # can be either 4-tuples (named call) or 3-tuples (anonymous
+    # function call). The previous redactor only matched 4-tuples
+    # and would FunctionClauseError on a valid 3-tuple frame —
+    # turning best-effort cleanup into a hard failure during
+    # rare-but-spec'd stacktrace shapes.
+    test "top_stack_frames/2 normalises 4-tuple named-function frames" do
+      stack = [{Foo.Bar, :baz, 2, [file: ~c"lib/foo.ex", line: 42]}]
+
+      assert [frame] = ServerTurns.top_stack_frames(stack, 5)
+      assert frame.module == Foo.Bar
+      assert frame.function == :baz
+      assert frame.arity == 2
+      assert frame.file == ~c"lib/foo.ex"
+      assert frame.line == 42
+    end
+
+    test "top_stack_frames/2 handles 3-tuple anonymous-function frames" do
+      anon = fn -> :ok end
+      stack = [{anon, [:arg1, :arg2], [file: ~c"nofile", line: 1]}]
+
+      assert [frame] = ServerTurns.top_stack_frames(stack, 5)
+      assert frame.module == nil
+      assert frame.function == anon
+      # arity normalised from arg-list length
+      assert frame.arity == 2
+      assert frame.file == ~c"nofile"
+      assert frame.line == 1
+    end
+
+    test "top_stack_frames/2 falls back gracefully on unknown frame shapes" do
+      stack = [:not_a_frame, {:partial, :tuple}]
+
+      assert [f1, f2] = ServerTurns.top_stack_frames(stack, 5)
+      assert f1 == %{module: nil, function: nil, arity: nil, file: nil, line: nil}
+      assert f2 == %{module: nil, function: nil, arity: nil, file: nil, line: nil}
+    end
+
+    test "top_stack_frames/2 truncates to requested count" do
+      stack =
+        for i <- 1..20,
+            do: {Foo, :bar, 0, [file: ~c"lib/foo.ex", line: i]}
+
+      assert ServerTurns.top_stack_frames(stack, 5) |> length() == 5
+    end
+
     test "safe_run/2 returns :ok and emits no telemetry on happy path" do
       handler_id = "test-cleanup-ok-#{System.unique_integer()}"
       parent = self()
