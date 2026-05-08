@@ -37,17 +37,19 @@ If you need to do this manually:
 def project do
   [
     app: :my_app,
-    compilers: Mix.compilers() ++ [:crank]   # add :crank
+    compilers: [:crank | Mix.compilers()]   # MUST prepend, not append
   ]
 end
 
 defp deps do
   [
-    {:crank, "~> 1.2"},
+    {:crank, "~> 2.0"},
     {:boundary, "~> 0.10"}
   ]
 end
 ```
+
+> **Compiler order matters.** `:crank` MUST be positioned BEFORE `:elixir` and `:app` in the `:compilers` list — `Mix.Tasks.Compile.Crank.run/1` registers `after_compiler(:elixir, ...)` and `after_compiler(:app, ...)` hooks that need to be installed before those compilers run. Append-style ordering (`Mix.compilers() ++ [:crank]`) is rejected by the same `mix crank.check` gate this code-page describes — see [`Compiler order`](../boundary-setup.md#compiler-order-matters) in the Boundary setup guide.
 
 Then create `config/boundary.exs` (or wherever your Boundary config lives) following the [Boundary setup guide](../boundary-setup.md).
 

@@ -310,7 +310,7 @@ If the machine needs to *record* the caller (for audit, for domain rules like "o
 ```elixir
 def deps do
   [
-    {:crank, "~> 1.0"}
+    {:crank, "~> 2.0"}
   ]
 end
 ```
