@@ -102,11 +102,25 @@ defmodule Crank.Typing do
   `@after_compile` callback that validates the configured memory module's
   typespec for forbidden `function/0` and `module/0` types (CRANK_TYPE_002).
 
-  Best-effort: if the memory module's typespec can't be fetched (typically
-  because it lives in the same project and BEAM bytecode isn't yet on disk
-  when this hook fires), the check is skipped silently — the same check
-  runs again later via `mix crank.check`. If the typespec IS available and
-  contains a forbidden type, this raises a `CompileError`.
+  Best-effort under module compilation order: if the memory module's
+  typespec can't be fetched (because it lives in the same project and
+  BEAM bytecode isn't yet on disk when this hook fires), the check is
+  skipped at compile time. **There is currently no second-pass check that
+  re-runs CRANK_TYPE_002 against modules whose memory-module typespec
+  was deferred** — earlier code comments claimed `mix crank.check`
+  performed that pass; that integration does not exist yet (Codex
+  review #23, 2026-05-08). Tracked as `CRANK_TYPE_002 second-pass` on
+  ROADMAP for v2.x.
+
+  Mitigation in the absence of the second-pass: order your project's
+  build files so the memory module compiles before the `use Crank,
+  memory: ...` module — Elixir typically does this automatically when
+  the dependency is `alias`-imported, but for cross-file forward
+  references in a single mix project the after_compile hook may not
+  see typespecs.
+
+  When the typespec IS available and contains a forbidden type, this
+  raises a `CompileError`.
   """
   def __after_compile_memory_check__(env, _bytecode) do
     case read_memory_module_attr(env.module) do
@@ -117,11 +131,21 @@ defmodule Crank.Typing do
 
   defp check_memory_module(memory_module, env) do
     case fetch_memory_types(memory_module) do
-      {:ok, types} -> raise_if_forbidden(memory_module, types, env)
-      # Memory module typespec not yet available (compilation order); the
-      # check runs again later via `mix crank.check`. Forbidden function/
-      # module types can't slip past the second-pass check.
-      :error -> :ok
+      {:ok, types} ->
+        raise_if_forbidden(memory_module, types, env)
+
+      :error ->
+        # Memory module typespec not available at this @after_compile
+        # invocation (compilation order). No second-pass exists yet —
+        # see ROADMAP entry. Emit telemetry so projects can detect
+        # when CRANK_TYPE_002 enforcement was skipped.
+        :telemetry.execute(
+          [:crank, :typing, :memory_check_deferred],
+          %{},
+          %{caller_module: env.module, memory_module: memory_module, file: env.file}
+        )
+
+        :ok
     end
   end
 

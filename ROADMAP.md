@@ -93,3 +93,19 @@ The current enforcement story (compile-time call-site checks, Boundary topology,
 **Why it matters.** Halt-on-first-stop is the documented contract. Race conditions in stop detection produce wrong failing-step attribution and can apply turns past the intended halt point.
 
 **Blocker.** Deterministic stop detection requires changing the reply contract. Today `gen_statem.call/3` returns whatever `c:reading/2` produces; the engine state is implicit. Embedding `{reading, engine}` in the reply would close the race but breaks the existing API. v2.1 is the right time to introduce a parallel `Crank.Server.turn_with_engine/3` (explicit two-tuple return) and migrate `Crank.Server.Turns` to use it. The `:DOWN`-based path stays as a fallback for the existing `turn/2,3` API.
+
+---
+
+## Deterministic second-pass for `CRANK_TYPE_002` memory-type enforcement
+
+**What.** `Crank.Typing.__after_compile_memory_check__/2` validates the memory module's typespec for forbidden `function/0`/`module/0` types. The check runs at the host module's `@after_compile` time. If the memory module's typespec isn't yet on disk (compilation order — same-project forward reference), the check is skipped and emits `[:crank, :typing, :memory_check_deferred]` telemetry. There is currently no second-pass that re-runs the check after all modules in the project have compiled.
+
+**Why it matters.** Without a second-pass, forbidden memory types can slip past `CRANK_TYPE_002` enforcement when compile order is unfavourable. Today this is mitigated by reorder-the-files convention; `mix crank.check` should pin it down deterministically.
+
+**Blocker.** Implementation requires a Mix-task integration that:
+
+1. Walks every module that emitted a `:memory_check_deferred` telemetry event (or queries every module with `__crank_memory_module__` attribute).
+2. Re-fetches typespecs from the now-on-disk BEAMs.
+3. Emits `CRANK_TYPE_002` violations as `Mix.Task.Compiler.Diagnostic` entries for any forbidden types found.
+
+The pattern mirrors `Mix.Tasks.Compile.Crank`'s late-DOWN telemetry consumption — straightforward but cross-cutting, hence deferred to a focused v2.x cycle rather than the v2.0.0 release surface.

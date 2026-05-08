@@ -165,6 +165,7 @@ defmodule Crank.PurityTraceTest do
         :telemetry.detach("test-flush-#{inspect(ref)}")
       end
     end
+
   end
 
   # ── Gate 4: non-termination ───────────────────────────────────────────────

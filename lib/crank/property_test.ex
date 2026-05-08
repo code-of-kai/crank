@@ -56,7 +56,7 @@ defmodule Crank.PropertyTest do
           {:ok, [Crank.t()]}
           | {:impurity, [Crank.Errors.Violation.t()], [Crank.t()], [PurityTrace.trace_event()],
              event :: term()}
-          | {:resource_exhausted, :heap | :timeout, [Crank.t()],
+          | {:resource_exhausted, :heap | :timeout | :trace_sync_timeout, [Crank.t()],
              [PurityTrace.trace_event()], event :: term()}
 
   @doc """
@@ -157,14 +157,21 @@ defmodule Crank.PropertyTest do
   end
 
   defp format_exhausted(kind, event, all_events, machines_so_far) do
-    code =
+    {code, label} =
       case kind do
-        :heap -> "CRANK_RUNTIME_001"
-        :timeout -> "CRANK_RUNTIME_002"
+        :heap ->
+          {"CRANK_RUNTIME_001", "resource limit"}
+
+        :timeout ->
+          {"CRANK_RUNTIME_002", "resource limit"}
+
+        :trace_sync_timeout ->
+          {"CRANK_RUNTIME_002",
+           "trace synchronisation timeout — partial trace; verdict is indeterminate"}
       end
 
     """
-    Crank turn exceeded resource limit during traced run.
+    Crank turn exceeded #{label} during traced run.
 
     Failing event:    #{inspect(event)}
     Event index:      #{length(machines_so_far) - 1}

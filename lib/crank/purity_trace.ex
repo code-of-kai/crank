@@ -109,7 +109,7 @@ defmodule Crank.PurityTrace do
 
       {:ok, result, trace_events}
       {:impurity, [%Crank.Errors.Violation{}, ...], partial_trace}
-      {:resource_exhausted, :heap | :timeout, partial_trace}
+      {:resource_exhausted, :heap | :timeout | :trace_sync_timeout, partial_trace}
 
   Trace events are normalised tuples of the form `{:call, {module, function,
   arity}}`. Order in the trace mirrors the order messages arrived but is
@@ -150,7 +150,7 @@ defmodule Crank.PurityTrace do
   @type result ::
           {:ok, term(), [trace_event()]}
           | {:impurity, [Crank.Errors.Violation.t()], [trace_event()]}
-          | {:resource_exhausted, :heap | :timeout, [trace_event()]}
+          | {:resource_exhausted, :heap | :timeout | :trace_sync_timeout, [trace_event()]}
 
   @doc """
   Runs `fun` under an isolated trace session and returns a structured verdict.
@@ -400,9 +400,22 @@ defmodule Crank.PurityTrace do
         # travel through different paths; without a flush, late traces are
         # lost. The coordinator owns the API call; the wait happens here
         # in the caller's mailbox.
-        flush_trace(session, worker)
-        final_trace = drain_trace(worker, trace_acc)
-        finalize_down(reason, Enum.reverse(final_trace), allow)
+        case flush_trace(session, worker) do
+          :ok ->
+            final_trace = drain_trace(worker, trace_acc)
+            finalize_down(reason, Enum.reverse(final_trace), allow)
+
+          :timeout ->
+            # Codex review #22 (2026-05-08): flush sync didn't
+            # confirm. The trace we have is partial — we don't
+            # know which messages haven't been delivered. Return
+            # an explicit indeterminate verdict rather than
+            # masquerading the partial trace as a clean `{:ok, _}`
+            # or as an impurity verdict. Callers (`assert_pure_turn`)
+            # treat this as a failure.
+            final_trace = drain_trace(worker, trace_acc)
+            {:resource_exhausted, :trace_sync_timeout, Enum.reverse(final_trace)}
+        end
     after
       remaining ->
         Process.exit(worker, :kill)
@@ -413,7 +426,7 @@ defmodule Crank.PurityTrace do
           200 -> :ok
         end
 
-        flush_trace(session, worker)
+        _ = flush_trace(session, worker)
         final_trace = drain_trace(worker, trace_acc)
         {:resource_exhausted, :timeout, Enum.reverse(final_trace)}
     end
@@ -429,9 +442,13 @@ defmodule Crank.PurityTrace do
   # in microseconds. The 5-second cap is generous to absorb legitimate
   # scheduler pressure (CI under high concurrency); a timeout here
   # almost always indicates a genuinely overloaded VM, not a happy
-  # path. Emit `[:crank, :purity_trace, :flush_timeout]` telemetry so
-  # projects can detect when the flush window is exceeded — that's
-  # the signal that a verdict may be based on a partial trace.
+  # path.
+  #
+  # Returns `:ok` on confirmation, `:timeout` if the deadline was
+  # reached without confirmation. Callers must NOT finalize a normal
+  # verdict on `:timeout` — the trace is partial and the verdict
+  # would be unreliable. `[:crank, :purity_trace, :flush_timeout]`
+  # telemetry still fires for monitoring/debugging.
   @flush_timeout_ms 5_000
   defp flush_trace(session, worker) do
     # `:trace.delivered/2` posts the reply `{:trace_delivered, worker, ref}`
@@ -450,7 +467,7 @@ defmodule Crank.PurityTrace do
           %{worker: worker, session: session, timeout_ms: @flush_timeout_ms}
         )
 
-        :ok
+        :timeout
     end
   end
 

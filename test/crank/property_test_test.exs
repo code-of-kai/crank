@@ -270,4 +270,5 @@ defmodule Crank.PropertyTestTest do
                turn_traced(machine, [:slow], timeout: 100)
     end
   end
+
 end
