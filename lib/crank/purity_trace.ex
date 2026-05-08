@@ -379,7 +379,14 @@ defmodule Crank.PurityTrace do
     # silently no-op'ing the pattern. Force the module to load so the trace
     # actually arms — Elixir's lazy module loading would otherwise cause
     # false-negative pure verdicts on the first call to a fresh module.
-    _ = Code.ensure_loaded(mod)
+    #
+    # Use `:erlang.module_loaded/1` (BIF, no code_server roundtrip) before
+    # falling back to `Code.ensure_loaded/1`. The fallback path goes through
+    # the global code_server, which serialises every call across the BEAM.
+    # Under parallel property tests with many prefix-expanded targets the
+    # round-trip cost dominates and saturates the server. CI with the OTP-26
+    # → 27 fix surfaced this as a 60s timeout in `set_pattern/2`.
+    ensure_loaded_fast(mod)
 
     Coordinator.exec(fn ->
       :trace.function(session, {mod, :_, :_}, true, [])
@@ -387,11 +394,20 @@ defmodule Crank.PurityTrace do
   end
 
   defp set_pattern(session, {m, f, a}) when is_atom(m) and is_atom(f) do
-    _ = Code.ensure_loaded(m)
+    ensure_loaded_fast(m)
 
     Coordinator.exec(fn ->
       :trace.function(session, {m, f, a}, true, [])
     end)
+  end
+
+  defp ensure_loaded_fast(mod) do
+    if :erlang.module_loaded(mod) do
+      :ok
+    else
+      _ = Code.ensure_loaded(mod)
+      :ok
+    end
   end
 
   # ── Collection loop ───────────────────────────────────────────────────────
