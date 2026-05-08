@@ -259,21 +259,23 @@ defmodule Crank.Server.Turns do
     }
   end
 
-  # Extract `:module` and `:name` from the fun via `:erlang.fun_info/1`
-  # rather than emitting the raw fun term. A fun term carries its
-  # captured lexical environment — `:erlang.term_to_binary(fn -> secret end)`
-  # contains the captured value bytes — so forwarding it to telemetry
-  # sinks would leak runtime state to downstream APMs/log forwarders.
-  # `fun_info` returns the synthesized fun identifier (e.g.
-  # `:"-host_fn/2-anon-0-"`) and the parent module, which preserve
-  # diagnostic value without the captures.
+  # Use `:erlang.fun_info/2` (per-field) rather than the 1-arg
+  # form. The 1-arg form returns the full info keyword list,
+  # which includes `{:env, captures}` for local funs and so
+  # materializes the captured environment even if we only read
+  # `:module` and `:name`. A fun capturing a large binary would
+  # allocate a copy on every cleanup-failure emission — the
+  # exact path that needs to stay lean.
+  #
+  # Per-field calls return only the requested atom value
+  # (`{:module, mod}` and `{:name, atom}` — no env, no other
+  # captures), preserving diagnostic value without the
+  # closure environment.
   defp format_frame({fun, arity_or_args, location})
        when is_function(fun) and is_list(location) do
-    info = :erlang.fun_info(fun)
-
     %{
-      module: Keyword.get(info, :module),
-      function: Keyword.get(info, :name),
+      module: fun_info_value(fun, :module),
+      function: fun_info_value(fun, :name),
       arity: normalize_arity(arity_or_args),
       file: Keyword.get(location, :file),
       line: Keyword.get(location, :line)
@@ -282,6 +284,15 @@ defmodule Crank.Server.Turns do
 
   defp format_frame(_other) do
     %{module: nil, function: nil, arity: nil, file: nil, line: nil}
+  end
+
+  defp fun_info_value(fun, key) do
+    case :erlang.fun_info(fun, key) do
+      {^key, value} -> value
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp normalize_arity(arity_or_args) when is_list(arity_or_args), do: length(arity_or_args)

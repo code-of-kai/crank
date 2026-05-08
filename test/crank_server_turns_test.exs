@@ -867,6 +867,33 @@ defmodule Crank.Server.TurnsTest do
              "secret string leaked into frame metadata"
     end
 
+    # Codex review #19 (2026-05-08): `:erlang.fun_info/1` returns
+    # the full info keyword list, including `{:env, captures}` —
+    # so reading `:module`/`:name` via the 1-arg form would still
+    # materialize the captured environment in memory on every
+    # cleanup-failure emission. The per-field 2-arg form is
+    # surgical: only the requested atom value is allocated.
+    #
+    # This test wraps a 1MB captured binary in a fun, runs the
+    # formatter, and asserts (a) the formatter completes, (b) the
+    # frame's encoded size is small (no captured binary survived).
+    test "top_stack_frames/2 stays lean against funs with large captured environments" do
+      huge_binary = :crypto.strong_rand_bytes(1_000_000)
+      fun_with_huge_capture = fn -> huge_binary end
+
+      stack = [{fun_with_huge_capture, 0, [file: ~c"nofile", line: 1]}]
+
+      [frame] = ServerTurns.top_stack_frames(stack, 5)
+
+      assert is_atom(frame.module)
+      assert is_atom(frame.function)
+
+      # Encoded frame must be small (no captured binary).
+      encoded_size = byte_size(:erlang.term_to_binary(frame))
+      assert encoded_size < 10_000,
+             "encoded frame size #{encoded_size} bytes; expected <10KB (large capture leaked?)"
+    end
+
     test "top_stack_frames/2 never emits raw fun terms across mixed stacktraces" do
       # Defensive sweep: build a stacktrace mixing 4-tuple and
       # 3-tuple entries with anonymous functions carrying
