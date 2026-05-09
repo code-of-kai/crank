@@ -176,48 +176,39 @@ defmodule Crank.PurityTrace do
     # so user-fun crashes don't propagate; a monitor is set up below.
     worker = spawn_paused_worker(fun, heap_words, check_atom_table)
 
-    # Step 2 — Create the isolated session. Tracer is the caller's pid so
-    # trace events arrive in this function's mailbox. The session and all
-    # subsequent `:trace.*` calls funnel through the coordinator because
-    # the underlying BEAM API is not thread-safe across concurrent
-    # callers — empirically, ~30% of trace events are dropped without
-    # serialisation.
+    # Step 2 — Pre-load forbidden targets in the caller's process so
+    # `:trace.function/4` arms (it returns 0 silently for unloaded
+    # modules). Done outside the Coordinator to avoid blocking it on
+    # `:code_server.call/1`.
+    Enum.each(forbidden, &preload_target/1)
+
+    # Step 3 — Set up the entire trace session in ONE Coordinator
+    # round-trip: create session, arm every forbidden pattern, attach
+    # to the worker. The Coordinator funnels every `:trace.*` call
+    # because the underlying BEAM API is not thread-safe across
+    # concurrent callers — empirically, ~30% of trace events are
+    # dropped without serialisation. Doing setup as one call
+    # (instead of 3) keeps the Coordinator's mailbox bounded under
+    # parallel property tests; per-call round-trips saturated it
+    # and triggered ExUnit's 60s property timeout (CI run 25586902676).
     session =
       Coordinator.exec(fn ->
-        :trace.session_create(:crank_purity_trace, parent, [])
+        s = :trace.session_create(:crank_purity_trace, parent, [])
+        Enum.each(forbidden, &arm_pattern(s, &1))
+        :trace.process(s, worker, true, [:call, :arity])
+        s
       end)
 
     try do
-      # Step 3 — Set forbidden patterns (session-scoped; no global state).
-      # Pre-load any unloaded targets in the user's own process to
-      # avoid blocking the Coordinator on `:code_server.call`. Then
-      # batch every `:trace.function/4` invocation into ONE Coordinator
-      # round-trip — under parallel property tests with ~50 prefix-
-      # expanded targets, per-target round-trips saturate the
-      # Coordinator's mailbox and ExUnit's 60s property timeout fires
-      # before the trace session is even fully armed (CI run 25584531644).
-      Enum.each(forbidden, &preload_target/1)
-
-      Coordinator.exec(fn ->
-        Enum.each(forbidden, &arm_pattern(session, &1))
-      end)
-
-      # Step 4 — Attach the trace to the worker. `:arity` keeps trace
-      # messages bounded — we want MFA identity, not arg values.
-      _ =
-        Coordinator.exec(fn ->
-          :trace.process(session, worker, true, [:call, :arity])
-        end)
-
       monitor_ref = Process.monitor(worker)
 
-      # Step 5 — Release the worker. Trace is fully armed.
+      # Step 4 — Release the worker. Trace is fully armed.
       send(worker, :start)
 
-      # Step 6 — Collect trace events until the worker exits or times out.
+      # Step 5 — Collect trace events until the worker exits or times out.
       collect_loop(worker, monitor_ref, timeout, [], allow, session)
     after
-      # Step 7 — Cleanup is unconditional. session_destroy is idempotent.
+      # Step 6 — Cleanup is unconditional. session_destroy is idempotent.
       _ =
         Coordinator.exec(fn ->
           :trace.session_destroy(session)
