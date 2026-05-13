@@ -11,6 +11,14 @@ defmodule Crank.MixProject do
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      # `compilers: [:crank | Mix.compilers()]` is deliberately omitted here.
+      # Crank's gate operates on modules tagged `use Crank` / `use Crank.Domain.Pure`;
+      # this library defines those macros and contains zero modules that use them,
+      # so wiring `:crank` would activate plumbing with no surface to fire on.
+      # `mix crank.check` therefore fails at CRANK_SETUP_001 against this repo
+      # by design. The discipline is exercised via `test/integration/*` against
+      # staged consumer projects. See `Mix.Tasks.Crank.Check`'s moduledoc for
+      # the full rationale.
       deps: deps(),
       name: "Crank",
       description: "Moore-style pure finite state machines (FSM) for Elixir — testable data structures first, optional gen_statem process adapter",

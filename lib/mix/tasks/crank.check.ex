@@ -31,6 +31,64 @@ defmodule Mix.Tasks.Crank.Check do
   Returns 0 on success. On failure, exits with the first non-zero exit
   code from the underlying tools, after running every preceding step
   whose precondition the failing step depends on.
+
+  ## Not applicable to the Crank source repo itself (design record)
+
+  This section is a design record, not a discoverability surface — a
+  contributor confused by `CRANK_SETUP_001` against the Crank source
+  is more likely to land on the explanatory comment in this repo's
+  `mix.exs` (next to the deliberately-omitted `:compilers` entry),
+  which points back here for the full reasoning.
+
+  The gate is designed for **consumer projects** — codebases that
+  declare FSM modules with `use Crank` and helper modules with
+  `use Crank.Domain.Pure`. Running `mix crank.check` against the
+  Crank source repo fails immediately at `check_setup/1` with
+  `CRANK_SETUP_001`, because `:crank` is intentionally not in the
+  Crank library's own `:compilers` list. This is deliberate, not an
+  oversight.
+
+  The discipline does not literally apply to the library that defines
+  it:
+
+    * The Crank source has zero `use Crank` modules — the library
+      defines the `__using__` macro; it does not invoke it on its own
+      modules.
+    * The Crank source has zero `use Crank.Domain.Pure` modules for
+      the same reason.
+    * The `__crank_domain__` persisted attribute (set exclusively by
+      those two `use` macros) is the prerequisite for every
+      `CRANK_PURITY_*` and `CRANK_DEP_002` check. Without it, those
+      checks have no surface to fire on.
+    * Marking library internals like `Crank.Turns` or `Crank.Typing`
+      with `use Crank.Domain.Pure` would tag them as "FSM domain
+      helpers" — which they aren't; they're library implementation.
+      The category mismatch would exercise the gate's plumbing but
+      not its semantic value.
+
+  The library dogfoods via integration tests instead. `test/integration/`
+  stages real path-dep consumer projects and exercises the full
+  compile-Boundary-diagnostic pipeline against them:
+
+    * `consumer_compile_test.exs` — fresh consumer compiles cleanly
+      without Credo loaded.
+    * `dep_001_test.exs` — domain-to-infrastructure reference fires
+      `CRANK_DEP_001` in a staged consumer.
+    * `dep_002_test.exs` — unmarked first-party helper fires
+      `CRANK_DEP_002` in a staged consumer.
+    * `purity_e2e_test.exs` — full call-site purity pipeline.
+
+  And `test/mix/tasks/crank.check_test.exs` covers `check_setup/1`'s
+  compiler-position logic against fake `Mix.Project` fixtures
+  (`WiredProject`, `AppendedAfterElixirProject`, etc.).
+
+  Between those two test paths the discipline is verified against the
+  shape it's *for* (consumer FSM modules), which is more faithful than
+  artificially tagging the library's internals would be. The Crank
+  source's own CI lane verifies each underlying component (`mix compile
+  --warnings-as-errors`, `mix credo --strict`, `mix dialyzer`,
+  `mix test`) individually, since the all-in-one gate cannot run
+  against this repo by design.
   """
 
   use Mix.Task
